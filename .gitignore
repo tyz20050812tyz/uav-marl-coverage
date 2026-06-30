@@ -1,0 +1,23 @@
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+wandb/
+*.log
+*.wandb
+
+# Training artifacts
+outputs/**
+!outputs/
+!outputs/.gitkeep
+!outputs/logs/
+!outputs/logs/.gitkeep
+!outputs/models/
+!outputs/models/.gitkeep
+!outputs/exports/
+!outputs/exports/.gitkeep

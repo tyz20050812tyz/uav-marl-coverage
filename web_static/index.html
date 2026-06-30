@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>无人机协同覆盖训练控制台</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">U</div>
+          <div>
+            <h1>UAV MARL</h1>
+            <p>协同覆盖训练控制台</p>
+          </div>
+        </div>
+
+        <form id="configForm" class="control-stack">
+          <section class="panel">
+            <h2>实验配置</h2>
+            <label>
+              <span class="label-row">实验模式 <span class="help-tip" tabindex="0" data-tip="选择自动实验流程：单次训练用于快速观察；实验一到四分别对应计划书中的随机对比、算法对比、消融实验和泛化实验。">?</span></span>
+              <select name="experiment_mode">
+                <option value="single">单次训练</option>
+                <option value="exp1">实验一：随机 vs 训练后</option>
+                <option value="exp2">实验二：算法对比</option>
+                <option value="exp3">实验三：消融实验</option>
+                <option value="exp4">实验四：泛化实验</option>
+              </select>
+            </label>
+            <label>
+              <span class="label-row">算法 <span class="help-tip" tabindex="0" data-tip="选择当前训练算法。Random 不学习；IDDPG 独立学习；MADDPG 使用集中式 critic；RS-MADDPG 在 MADDPG 基础上加入奖励塑形。">?</span></span>
+              <select name="algo">
+                <option>RS-MADDPG</option>
+                <option>MADDPG</option>
+                <option>IDDPG</option>
+                <option>Random</option>
+              </select>
+            </label>
+            <div class="two-col">
+              <label>
+                <span class="label-row">智能体 <span class="help-tip" tabindex="0" data-tip="无人机数量，同时也是目标点数量。N 越大任务越难，网络输入维度也会变化。">?</span></span>
+                <select name="num_agents">
+                  <option value="3">3</option>
+                  <option value="4">4</option>
+                  <option value="5">5</option>
+                </select>
+              </label>
+              <label>
+                <span class="label-row">Episodes <span class="help-tip" tabindex="0" data-tip="训练轮数。500 适合快速演示；3000+ 更适合观察趋势；最终实验建议更长训练并多随机种子。">?</span></span>
+                <input name="episodes" type="number" value="500" min="1" max="50000" step="1" />
+              </label>
+            </div>
+            <div class="two-col">
+              <label>
+                <span class="label-row">Batch <span class="help-tip" tabindex="0" data-tip="每次网络更新采样的经验数量。越大越稳定但更慢；当前 Web 快速演示默认 256。">?</span></span>
+                <input name="batch_size" type="number" value="256" min="32" max="2048" step="1" />
+              </label>
+              <label>
+                <span class="label-row">预热 <span class="help-tip" tabindex="0" data-tip="经验回放池至少积累多少样本后才开始更新网络。太小容易不稳定，太大则前期只采样不学习。">?</span></span>
+                <input name="buffer_warmup" type="number" value="256" min="32" max="4096" step="1" />
+              </label>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>训练参数</h2>
+            <label>
+              <span class="label-row">Actor LR <span class="help-tip" tabindex="0" data-tip="Actor 策略网络学习率。过大容易震荡，过小收敛慢；常用范围 1e-4 到 1e-3。">?</span></span>
+              <input name="actor_lr" type="number" value="0.001" min="0.00001" max="0.01" step="any" />
+            </label>
+            <label>
+              <span class="label-row">Critic LR <span class="help-tip" tabindex="0" data-tip="Critic 价值网络学习率，影响 Q 值估计速度。过大可能导致价值估计不稳定。">?</span></span>
+              <input name="critic_lr" type="number" value="0.001" min="0.00001" max="0.01" step="any" />
+            </label>
+            <label>
+              <span class="label-row">Gamma <span class="help-tip" tabindex="0" data-tip="折扣因子，越接近 1 越重视长期回报。simple_spread 步数较短，0.95 是较稳的默认值。">?</span></span>
+              <input name="gamma" type="range" value="0.95" min="0.8" max="0.99" step="0.01" data-output="gammaValue" />
+              <span id="gammaValue" class="range-value">0.95</span>
+            </label>
+            <label>
+              <span class="label-row">随机种子 <span class="help-tip" tabindex="0" data-tip="控制随机初始化和采样，便于复现实验。正式对比通常使用多个 seed 取均值。">?</span></span>
+              <input name="seed" type="number" value="42" min="0" max="999999" />
+            </label>
+          </section>
+
+          <section class="panel">
+            <h2>安全与覆盖</h2>
+            <label>
+              <span class="label-row">覆盖半径 <span class="help-tip" tabindex="0" data-tip="目标点周围多大范围算被无人机覆盖。值越大覆盖率越容易高，但评价会更宽松。">?</span></span>
+              <input name="coverage_ratio" type="range" value="0.12" min="0.04" max="0.25" step="0.01" data-output="coverageValue" />
+              <span id="coverageValue" class="range-value">0.12</span>
+            </label>
+            <label>
+              <span class="label-row">安全距离 <span class="help-tip" tabindex="0" data-tip="无人机之间低于该距离会产生安全惩罚，引导提前避让。过大可能让智能体过度分散。">?</span></span>
+              <input name="safe_ratio" type="range" value="0.10" min="0.04" max="0.25" step="0.01" data-output="safeValue" />
+              <span id="safeValue" class="range-value">0.10</span>
+            </label>
+            <label class="toggle-row">
+              <input name="use_weight_scheduling" type="checkbox" checked />
+              <span>动态奖励权重 <span class="help-tip" tabindex="0" data-tip="训练早期弱化安全/冗余惩罚，先让智能体学会接近目标；后期逐步加强协同和安全约束。">?</span></span>
+            </label>
+            <label>
+              <span class="label-row">帧采样 <span class="help-tip" tabindex="0" data-tip="控制后端每隔几步向前端推送一帧。每一步最细腻；每 5 步更省性能。">?</span></span>
+              <select name="frame_stride">
+                <option value="1">每一步</option>
+                <option value="2">每 2 步</option>
+                <option value="5">每 5 步</option>
+              </select>
+            </label>
+          </section>
+
+          <section class="panel">
+            <h2>实验追踪</h2>
+            <label class="toggle-row">
+              <input name="use_wandb" type="checkbox" />
+              <span>启用 W&B <span class="help-tip" tabindex="0" data-tip="打开后会把每个 episode 的奖励、覆盖率、碰撞、loss 等指标同步到 W&B，适合长训练留档。">?</span></span>
+            </label>
+            <label>
+              <span class="label-row">Project <span class="help-tip" tabindex="0" data-tip="W&B 项目名。相同项目名下的多次训练会归档到同一个项目里。">?</span></span>
+              <input name="wandb_project" type="text" value="uav-marl" />
+            </label>
+            <label>
+              <span class="label-row">Run Name <span class="help-tip" tabindex="0" data-tip="W&B 单次运行名称。留空则自动生成；批量实验会自动追加 run 标签。">?</span></span>
+              <input name="wandb_run_name" type="text" placeholder="留空自动生成" />
+            </label>
+          </section>
+
+          <div class="action-row">
+            <button id="startBtn" type="submit">开始训练</button>
+            <button id="stopBtn" type="button" class="secondary">停止</button>
+          </div>
+        </form>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Real-time multi-agent training</p>
+            <h2>每个 Episode 的智能体运动实时回放</h2>
+          </div>
+          <div class="status-pill" id="statusPill">idle</div>
+        </header>
+
+        <section class="kpi-grid">
+          <div class="kpi"><span>Episode</span><strong id="episodeKpi">0 / 0</strong></div>
+          <div class="kpi"><span>覆盖率</span><strong id="coverageKpi">0%</strong></div>
+          <div class="kpi"><span>碰撞</span><strong id="collisionKpi">0</strong></div>
+          <div class="kpi"><span>奖励</span><strong id="rewardKpi">0.00</strong></div>
+          <div class="kpi"><span>完成步数</span><strong id="stepsKpi">0</strong></div>
+        </section>
+
+        <section class="sim-layout">
+          <div class="sim-panel">
+            <div class="panel-title">
+              <div>
+                <h3>二维协同覆盖场</h3>
+                <p id="frameLabel">等待训练数据</p>
+              </div>
+              <div class="legend">
+                <span><i class="agent-dot"></i>无人机</span>
+                <span><i class="target-dot"></i>目标点</span>
+                <span><i class="safe-dot"></i>安全圈</span>
+              </div>
+            </div>
+            <canvas id="simCanvas" width="1000" height="720"></canvas>
+          </div>
+
+          <div class="side-panels">
+            <section class="panel chart-panel">
+              <h3>训练曲线</h3>
+              <canvas id="chartCanvas" width="520" height="260"></canvas>
+            </section>
+            <section class="panel event-panel">
+              <h3>事件流</h3>
+              <div id="eventLog" class="event-log"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="results-layout">
+          <div class="panel summary-panel">
+            <div class="panel-title">
+              <div>
+                <h3>结果总结</h3>
+                <p id="summaryHeadline">完成实验后会自动生成结构化结论</p>
+              </div>
+              <button id="deepseekBtn" type="button" class="secondary small-button">DeepSeek 生成报告</button>
+            </div>
+            <div id="diagnosisList" class="pill-list"></div>
+            <div id="recommendationList" class="recommendation-list"></div>
+          </div>
+
+          <div class="panel table-panel">
+            <h3>指标总览</h3>
+            <div class="table-scroll">
+              <table id="resultTable">
+                <thead>
+                  <tr>
+                    <th>Run</th>
+                    <th>算法</th>
+                    <th>评分</th>
+                    <th>覆盖率</th>
+                    <th>碰撞</th>
+                    <th>冗余率</th>
+                    <th>完成步数</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="panel report-panel">
+            <h3>报告文本</h3>
+            <pre id="reportText">暂无报告文本。</pre>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
