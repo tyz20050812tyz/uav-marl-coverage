@@ -92,6 +92,18 @@ if [ "${DEEPSEEK_API_KEY:-}" = "your_deepseek_api_key_here" ]; then
   unset DEEPSEEK_API_KEY
 fi
 
+# 非空时联网确认 key 有效性
+if [ -n "${DEEPSEEK_API_KEY:-}" ]; then
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
+    "https://api.deepseek.com/v1/models" \
+    -H "Authorization: Bearer ${DEEPSEEK_API_KEY}" 2>/dev/null)
+
+  if [ "$HTTP_CODE" = "401" ] || [ -z "$HTTP_CODE" ]; then
+    print_warn "DEEPSEEK_API_KEY 无效或网络超时，将重新输入"
+    unset DEEPSEEK_API_KEY
+  fi
+fi
+
 if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
   print_warn "未检测到 DEEPSEEK_API_KEY"
   printf "请输入 DeepSeek API Key（输入时不会显示，留空则跳过 LLM 报告功能）: "

@@ -47,6 +47,8 @@ ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / 'web_static'
 LOG_DIR = ROOT / 'outputs' / 'logs'
 MODEL_DIR = ROOT / 'outputs' / 'models'
+ARCHIVE_DIR = ROOT / 'outputs' / 'archive'
+TASKS_INDEX_PATH = ROOT / 'outputs' / 'tasks_index.json'
 DOWNLOAD_ROOTS = (LOG_DIR.resolve(), MODEL_DIR.resolve())
 LOCAL_ENV_FILE = ROOT / '.env.local'
 
@@ -194,6 +196,7 @@ class TrainingService:
         self.queue: list[str] = []
         self.active_task_id: Optional[str] = None
         self.state = self._empty_state()
+        self._init_recovery()
 
     def _empty_state(self) -> Dict[str, Any]:
         return {
@@ -295,6 +298,238 @@ class TrainingService:
                 best = candidate
         return best
 
+    # ── Persistence & Recovery ──────────────────────────────────────
+
+    def _init_recovery(self):
+        """Recover task records from persistence file and reconcile with disk files."""
+        if not TASKS_INDEX_PATH.exists():
+            LOGGER.info("No tasks_index.json found — will scan existing files for recovery")
+        recovered = self._load_tasks_index()
+        self._scan_existing_files(recovered)
+        with self._lock:
+            for task_id, task in recovered.items():
+                if task_id not in self.tasks:
+                    task['status'] = task.get('status', 'interrupted')
+                    task['message'] = task.get('message', 'recovered on restart')
+                    self.tasks[task_id] = task
+            if recovered:
+                self._save_tasks_index_locked()
+                LOGGER.info("Recovered %d previous task(s)", len(recovered))
+
+    def _load_tasks_index(self) -> Dict[str, Dict[str, Any]]:
+        """Load tasks_index.json. Returns empty dict on any error."""
+        try:
+            if not TASKS_INDEX_PATH.exists():
+                return {}
+            with open(TASKS_INDEX_PATH, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            tasks = data.get('tasks', {}) if isinstance(data, dict) else {}
+            valid: Dict[str, Dict[str, Any]] = {}
+            for tid, task in tasks.items():
+                if isinstance(task, dict) and 'task_id' in task:
+                    valid[tid] = task
+            return valid
+        except (json.JSONDecodeError, OSError) as exc:
+            LOGGER.warning("Could not load tasks_index.json: %s", exc)
+            return {}
+
+    def _save_tasks_index_locked(self):
+        """Persist current task metadata (minimal summaries) to disk.
+        Must be called while holding self._lock."""
+        summaries: Dict[str, Any] = {}
+        for task_id, task in self.tasks.items():
+            # Strip large history arrays from experiment results for compact storage
+            slim_results = []
+            for result in (task.get('experiment_results') or []):
+                slim = {k: v for k, v in result.items() if k != 'history'}
+                slim_results.append(slim)
+            summaries[task_id] = {
+                'task_id': task.get('task_id'),
+                'task_name': task.get('task_name'),
+                'status': task.get('status'),
+                'message': task.get('message'),
+                'config': {
+                    k: v for k, v in (task.get('config') or {}).items()
+                    if k in {'experiment_mode', 'algo', 'episodes', 'num_agents',
+                             'seed', 'coverage_ratio', 'safe_ratio',
+                             'use_weight_scheduling', 'use_assignment', 'use_redundancy',
+                             'use_safety', 'use_collision', 'eval_interval'}
+                },
+                'created_at': task.get('created_at'),
+                'started_at': task.get('started_at'),
+                'ended_at': task.get('ended_at'),
+                'episode': task.get('episode', 0),
+                'metrics': task.get('metrics'),
+                'experiment_results': slim_results,
+                'report': task.get('report'),
+                'run_plan': task.get('run_plan'),
+            }
+        payload = {'updated_at': time.time(), 'tasks': summaries}
+        tmp_path = TASKS_INDEX_PATH.with_suffix('.tmp')
+        TASKS_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False, default=str)
+            tmp_path.replace(TASKS_INDEX_PATH)
+        except OSError as exc:
+            LOGGER.error("Failed to persist tasks_index.json: %s", exc)
+
+    def _scan_existing_files(self, recovered: Dict[str, Dict[str, Any]]):
+        """Scan log/model directories for files that belong to unknown tasks
+        and create stub entries for them. Merges into `recovered` in place."""
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+        discovered: Dict[str, Dict[str, Any]] = {}
+
+        # Scan log files for task_id patterns
+        for path in sorted(LOG_DIR.glob('*.json')):
+            task_id = self._extract_task_id_from_filename(path.stem)
+            if not task_id:
+                continue
+            if task_id in self.tasks or task_id in recovered or task_id in discovered:
+                continue
+            discovered[task_id] = self._stub_from_filename(path, task_id, 'log')
+
+        # Scan model files
+        for path in sorted(MODEL_DIR.glob('*.pt')):
+            task_id = self._extract_task_id_from_filename(path.stem)
+            if not task_id:
+                continue
+            if task_id in self.tasks or task_id in recovered or task_id in discovered:
+                continue
+            discovered[task_id] = self._stub_from_filename(path, task_id, 'model')
+
+        if discovered:
+            LOGGER.info("Discovered %d task(s) from existing files", len(discovered))
+            recovered.update(discovered)
+
+    def _extract_task_id_from_filename(self, stem: str) -> Optional[str]:
+        """Extract task_id from filename like:
+        'rs_maddpg_1782868709_92de4b6f_single_seed42_logs'
+        → 'rs_maddpg_1782868709_92de4b6f'
+
+        Pattern: {algo}_{timestamp}_{uuid8}[_{suffix}_seed{seed}_{kind}]
+        """
+        import re
+        # Match: algo_timestamp_uuid8 pattern
+        match = re.match(
+            r'^([a-z_]+)_(\d{10})_([0-9a-f]{8})',
+            stem,
+        )
+        if match:
+            return f"{match.group(1)}_{match.group(2)}_{match.group(3)}"
+        return None
+
+    def _stub_from_filename(self, path: Path, task_id: str,
+                            source: str) -> Dict[str, Any]:
+        """Create a minimal recovered task stub."""
+        import re
+        stem = path.stem
+        seed_match = re.search(r'_seed(\d+)', stem)
+        seed = int(seed_match.group(1)) if seed_match else 42
+        parts = task_id.split('_')
+        algo = parts[0].upper().replace('_', '-') if parts else 'unknown'
+        now = time.time()
+        return {
+            'task_id': task_id,
+            'task_name': f"{task_id} (recovered)",
+            'status': 'interrupted',
+            'message': f'recovered from {source} file',
+            'config': {
+                'experiment_mode': 'single',
+                'algo': algo if algo in {'RANDOM', 'IDDPG', 'MADDPG', 'RS-MADDPG'} else 'RS-MADDPG',
+                'episodes': 500,
+                'num_agents': 3,
+                'seed': seed,
+            },
+            'created_at': now,
+            'started_at': now,
+            'ended_at': now,
+            'episode': 0,
+            'metrics': {},
+        }
+
+    def delete_task(self, task_id: str) -> Dict[str, Any]:
+        """Archive all files belonging to a task and remove it from the index.
+
+        Moves related log files, model files, and summary files to
+        outputs/archive/{task_id}/ and removes the task from memory and index.
+        """
+        with self._lock:
+            if task_id not in self.tasks:
+                return {'error': f'任务 {task_id} 不存在'}
+
+            # Remove from queue if present
+            if task_id in self.queue:
+                self.queue.remove(task_id)
+                self._stop.set()
+
+            task = self.tasks.pop(task_id)
+            if self.active_task_id == task_id:
+                self.active_task_id = None
+                self.state = self._empty_state()
+
+            self._save_tasks_index_locked()
+
+        # Archive files outside the lock to avoid blocking
+        archived_count = self._archive_task_files(task_id)
+
+        self.hub.publish('tasks', self.tasks_snapshot())
+        LOGGER.info("Deleted task %s — archived %d file(s)", task_id, archived_count)
+        return {
+            'ok': True,
+            'task_id': task_id,
+            'archived_files': archived_count,
+        }
+
+    def _archive_task_files(self, task_id: str) -> int:
+        """Move all files matching task_id to archive directory."""
+        archive_sub = ARCHIVE_DIR / task_id
+        archive_sub.mkdir(parents=True, exist_ok=True)
+        count = 0
+
+        # Collect files from logs and models directories
+        candidates: list[Path] = []
+        for directory in (LOG_DIR, MODEL_DIR):
+            if not directory.exists():
+                continue
+            for path in directory.iterdir():
+                if not path.is_file():
+                    continue
+                stem = path.stem
+                if stem.startswith(task_id):
+                    candidates.append(path)
+
+        for path in candidates:
+            dest = archive_sub / path.name
+            try:
+                # If destination exists, add a timestamp suffix
+                if dest.exists():
+                    dest = archive_sub / f"{path.stem}_{int(time.time())}{path.suffix}"
+                path.rename(dest)
+                count += 1
+            except OSError as exc:
+                LOGGER.warning("Failed to archive %s → %s: %s", path, dest, exc)
+
+        # Write an archive manifest for traceability
+        manifest = {
+            'task_id': task_id,
+            'archived_at': time.time(),
+            'archived_at_iso': time.strftime(
+                '%Y-%m-%dT%H:%M:%S', time.localtime(),
+            ),
+            'file_count': count,
+        }
+        manifest_path = archive_sub / 'archive_manifest.json'
+        try:
+            with open(manifest_path, 'w', encoding='utf-8') as f:
+                json.dump(manifest, f, indent=2, ensure_ascii=False, default=str)
+        except OSError as exc:
+            LOGGER.warning("Failed to write archive manifest: %s", exc)
+
+        return count
+
     def start(self, config: Dict[str, Any]) -> Dict[str, Any]:
         task_id = self.create_task(config)
         return self.snapshot(task_id)
@@ -307,6 +542,7 @@ class TrainingService:
         with self._lock:
             self.tasks[task_id] = self._new_task_state(task_id, cfg)
             self.queue.append(task_id)
+            self._save_tasks_index_locked()
             if self._thread is None or not self._thread.is_alive():
                 should_start = True
         if should_start:
@@ -325,6 +561,7 @@ class TrainingService:
     def stop(self, task_id: Optional[str] = None):
         event = 'tasks'
         snapshot_task_id = None
+        should_save = False
         with self._lock:
             target = task_id or self.active_task_id
             if target and target in self.queue:
@@ -333,12 +570,15 @@ class TrainingService:
                 task['status'] = 'stopped'
                 task['message'] = 'stopped before running'
                 task['ended_at'] = time.time()
+                should_save = True
             if target and target == self.active_task_id:
                 self._stop.set()
                 task = self.tasks[target]
                 task['message'] = 'stopping'
                 event = 'status'
                 snapshot_task_id = target
+            if should_save:
+                self._save_tasks_index_locked()
         if event == 'status':
             self.hub.publish('status', self.snapshot(snapshot_task_id))
         else:
@@ -355,6 +595,7 @@ class TrainingService:
                 if should_break:
                     task_id = None
                     cfg = None
+                    self._save_tasks_index_locked()
                 else:
                     task_id = self.queue.pop(0)
                     task = self.tasks[task_id]
@@ -375,6 +616,7 @@ class TrainingService:
                         'started_at': time.time(),
                         'ended_at': None,
                     })
+                    self._save_tasks_index_locked()
                     cfg = dict(task['config'])
             if should_break:
                 self.hub.publish('tasks', self.tasks_snapshot())
@@ -462,6 +704,7 @@ class TrainingService:
                 self.state['status'] = final_status
                 self.state['message'] = final_status
                 self.state['ended_at'] = time.time()
+                self._save_tasks_index_locked()
             self._publish('complete', self.snapshot(task_id))
         except Exception as exc:
             LOGGER.exception('training failed')
@@ -469,6 +712,7 @@ class TrainingService:
                 self.state['status'] = 'error'
                 self.state['message'] = str(exc)
                 self.state['ended_at'] = time.time()
+                self._save_tasks_index_locked()
             self._publish('error', self.snapshot(task_id))
         finally:
             if self._env is not None:
@@ -1172,6 +1416,14 @@ class RequestHandler(SimpleHTTPRequestHandler):
             task_id = parsed.path.split('/')[-2]
             self.service.stop(task_id)
             self._send_json(self.service.snapshot(task_id))
+            return
+        if parsed.path.startswith('/api/tasks/') and parsed.path.endswith('/delete'):
+            task_id = parsed.path.split('/')[-2]
+            result = self.service.delete_task(task_id)
+            if 'error' in result:
+                self._send_json(result, HTTPStatus.NOT_FOUND)
+            else:
+                self._send_json(result)
             return
         if parsed.path == '/api/train/start':
             try:

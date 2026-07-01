@@ -100,9 +100,23 @@ call :print_ok "依赖已就绪"
 :: ----- 检查 DeepSeek API Key -----
 call :print_step "检查 DeepSeek API Key"
 
-if "%DEEPSEEK_API_KEY%"=="your_deepseek_api_key_here" set "DEEPSEEK_API_KEY="
+if "!DEEPSEEK_API_KEY!"=="your_deepseek_api_key_here" set "DEEPSEEK_API_KEY="
 
-if "%DEEPSEEK_API_KEY%"=="" (
+:: 非空时联网确认 key 有效性
+if not "!DEEPSEEK_API_KEY!"=="" (
+    set "HTTP_CODE="
+    for /f "delims=" %%c in ('curl -s -o nul -w "%%{http_code}" --max-time 5 "https://api.deepseek.com/v1/models" -H "Authorization: Bearer !DEEPSEEK_API_KEY!" 2^>nul') do set "HTTP_CODE=%%c"
+
+    if "!HTTP_CODE!"=="401" (
+        call :print_warn "DEEPSEEK_API_KEY 无效（HTTP 401），将重新输入"
+        set "DEEPSEEK_API_KEY="
+    ) else if "!HTTP_CODE!"=="" (
+        call :print_warn "网络超时或不通，将重新输入"
+        set "DEEPSEEK_API_KEY="
+    )
+)
+
+if "!DEEPSEEK_API_KEY!"=="" (
     call :print_warn "未检测到 DEEPSEEK_API_KEY"
 
     :: 使用 PowerShell 安全读取密钥（输入时不显示）

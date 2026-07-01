@@ -27,6 +27,7 @@ const summaryHeadline = document.getElementById("summaryHeadline");
 const diagnosisList = document.getElementById("diagnosisList");
 const recommendationList = document.getElementById("recommendationList");
 const reportText = document.getElementById("reportText");
+const exportReportBtn = document.getElementById("exportReportBtn");
 const assetList = document.getElementById("assetList");
 const resultTableBody = document.querySelector("#resultTable tbody");
 const simCanvas = document.getElementById("simCanvas");
@@ -50,6 +51,7 @@ const state = {
   history: [],
   report: null,
   llmReport: null,
+  lastReportMd: "",
   assets: [],
   runPlan: [],
   currentRun: null,
@@ -176,6 +178,8 @@ deepseekBtn.addEventListener("click", async () => {
     deepseekBtn.textContent = "DeepSeek 生成报告";
   }
 });
+
+exportReportBtn.addEventListener("click", () => exportReport());
 
 refreshTasksBtn.addEventListener("click", () => loadTasks());
 backToTasksBtn.addEventListener("click", () => showTaskCenter());
@@ -340,6 +344,7 @@ function renderTaskTable() {
         <div class="table-actions">
           <button type="button" data-action="view" data-task-id="${escapeHtml(task.task_id)}">查看</button>
           <button type="button" class="secondary" data-action="stop" data-task-id="${escapeHtml(task.task_id)}">停止</button>
+          <button type="button" class="danger" data-action="delete" data-task-id="${escapeHtml(task.task_id)}">删除</button>
         </div>
       </td>
     `;
@@ -366,6 +371,21 @@ taskTableBody.addEventListener("click", async (event) => {
       await loadTasks();
     } catch (error) {
       taskListHint.textContent = `停止失败：${error.message}`;
+    }
+    return;
+  }
+  if (button.dataset.action === "delete") {
+    if (!confirm(`确定要删除任务 ${taskId} 吗？\n\n相关文件将被移动到 archive 文件夹，不会物理删除。`)) {
+      return;
+    }
+    try {
+      const result = await postJson(`/api/tasks/${taskId}/delete`);
+      if (result.ok) {
+        taskListHint.textContent = `任务已归档，共 ${result.archived_files || 0} 个文件`;
+      }
+      await loadTasks();
+    } catch (error) {
+      taskListHint.textContent = `删除失败：${error.message}`;
     }
   }
 });
@@ -535,11 +555,63 @@ function renderReport(report) {
     resultTableBody.appendChild(row);
   }
 
-  reportText.textContent = report.report_text || "暂无报告文本。";
+  const md = report.report_text || "暂无报告文本。";
+  state.lastReportMd = md;
+  renderMarkdownTo(reportText, md);
+  updateExportButton();
 }
 
 function renderLlmReport(result) {
-  if (result?.text) reportText.textContent = result.text;
+  if (result?.text) {
+    state.lastReportMd = result.text;
+    renderMarkdownTo(reportText, result.text);
+    updateExportButton();
+  }
+}
+
+/** Render Markdown text into a DOM element. Falls back to plain text. */
+function renderMarkdownTo(element, text) {
+  if (!element) return;
+  const safe = String(text || "").trim();
+  if (!safe) {
+    element.textContent = "暂无报告文本。";
+    return;
+  }
+  try {
+    if (typeof marked !== "undefined" && marked.parse) {
+      element.innerHTML = marked.parse(safe);
+    } else {
+      element.textContent = safe;
+    }
+  } catch {
+    element.textContent = safe;
+  }
+}
+
+/** Enable export button only when there is report content to save. */
+function updateExportButton() {
+  if (!exportReportBtn) return;
+  exportReportBtn.disabled = !state.lastReportMd;
+}
+
+/** Export the current report as a .md file download. */
+function exportReport() {
+  if (!state.lastReportMd) {
+    logEvent("没有可导出的报告内容");
+    return;
+  }
+  const blob = new Blob([state.lastReportMd], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const filename = `uav_marl_report_${timestamp}.md`;
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  logEvent(`报告已导出为 ${filename}`);
 }
 
 function formatPercent(value) {

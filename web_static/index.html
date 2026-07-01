@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>无人机协同覆盖训练控制台</title>
     <link rel="stylesheet" href="/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   </head>
   <body>
     <div id="taskCenter" class="task-center">
@@ -235,8 +236,9 @@
         </section>
 
         <form id="configForm" class="control-stack">
-          <section class="panel">
-            <h2>实验配置</h2>
+          <details class="config-group" open>
+            <summary><h2>实验配置</h2></summary>
+            <section class="panel">
             <label>
               <span class="label-row">任务名 <span class="help-tip" tabindex="0" data-tip="新任务显示在任务中心的名称。留空会自动生成。">?</span></span>
               <input name="task_name" type="text" placeholder="留空自动生成" />
@@ -284,10 +286,12 @@
                 <input name="buffer_warmup" type="number" value="256" min="32" max="4096" step="1" />
               </label>
             </div>
-          </section>
+            </section>
+          </details>
 
-          <section class="panel">
-            <h2>训练参数</h2>
+          <details class="config-group">
+            <summary><h2>训练参数</h2></summary>
+            <section class="panel">
             <label>
               <span class="label-row">Actor LR <span class="help-tip" tabindex="0" data-tip="Actor 策略网络学习率。过大容易震荡，过小收敛慢；常用范围 1e-4 到 1e-3。">?</span></span>
               <input name="actor_lr" type="number" value="0.001" min="0.00001" max="0.01" step="any" />
@@ -320,10 +324,12 @@
               <input name="noise_final_scale" type="range" value="0.10" min="0" max="1" step="0.05" data-output="noiseValue" />
               <span id="noiseValue" class="range-value">0.10</span>
             </label>
-          </section>
+            </section>
+          </details>
 
-          <section class="panel">
-            <h2>安全与覆盖</h2>
+          <details class="config-group">
+            <summary><h2>安全与覆盖</h2></summary>
+            <section class="panel">
             <label>
               <span class="label-row">覆盖半径 <span class="help-tip" tabindex="0" data-tip="目标点周围多大范围算被无人机覆盖。值越大覆盖率越容易高，但评价会更宽松。">?</span></span>
               <input name="coverage_ratio" type="range" value="0.12" min="0.04" max="0.25" step="0.01" data-output="coverageValue" />
@@ -346,10 +352,12 @@
                 <option value="5">每 5 步</option>
               </select>
             </label>
-          </section>
+            </section>
+          </details>
 
-          <section class="panel">
-            <h2>实验追踪</h2>
+          <details class="config-group">
+            <summary><h2>实验追踪</h2></summary>
+            <section class="panel">
             <label class="toggle-row">
               <input name="use_wandb" type="checkbox" />
               <span>启用 W&B <span class="help-tip" tabindex="0" data-tip="打开后会把每个 episode 的奖励、覆盖率、碰撞、loss 等指标同步到 W&B，适合长训练留档。">?</span></span>
@@ -362,7 +370,8 @@
               <span class="label-row">Run Name <span class="help-tip" tabindex="0" data-tip="W&B 单次运行名称。留空则自动生成；批量实验会自动追加 run 标签。">?</span></span>
               <input name="wandb_run_name" type="text" placeholder="留空自动生成" />
             </label>
-          </section>
+            </section>
+          </details>
 
           <div class="action-row">
             <button id="startBtn" type="submit">加入队列</button>
@@ -464,8 +473,14 @@
           </div>
 
           <div class="panel report-panel">
-            <h3>报告文本</h3>
-            <pre id="reportText">暂无报告文本。</pre>
+            <div class="panel-title">
+              <div>
+                <h3>报告文本</h3>
+                <p>支持 Markdown 格式渲染</p>
+              </div>
+              <button id="exportReportBtn" type="button" class="secondary small-button" disabled>导出报告</button>
+            </div>
+            <div id="reportText" class="report-body">暂无报告文本。</div>
           </div>
         </section>
       </main>
