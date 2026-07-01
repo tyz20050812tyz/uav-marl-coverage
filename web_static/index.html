@@ -478,7 +478,13 @@
                 <h3>报告文本</h3>
                 <p>支持 Markdown 格式渲染</p>
               </div>
-              <button id="exportReportBtn" type="button" class="secondary small-button" disabled>导出报告</button>
+              <div class="export-dropdown">
+                <button id="exportReportBtn" type="button" class="secondary small-button" disabled>导出报告 ▾</button>
+                <div class="export-menu hidden" id="exportMenu">
+                  <button type="button" data-format="md">Markdown (.md)</button>
+                  <button type="button" data-format="pdf">PDF 文档</button>
+                </div>
+              </div>
             </div>
             <div id="reportText" class="report-body">暂无报告文本。</div>
           </div>

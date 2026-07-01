@@ -28,6 +28,7 @@ const diagnosisList = document.getElementById("diagnosisList");
 const recommendationList = document.getElementById("recommendationList");
 const reportText = document.getElementById("reportText");
 const exportReportBtn = document.getElementById("exportReportBtn");
+const exportMenu = document.getElementById("exportMenu");
 const assetList = document.getElementById("assetList");
 const resultTableBody = document.querySelector("#resultTable tbody");
 const simCanvas = document.getElementById("simCanvas");
@@ -179,7 +180,29 @@ deepseekBtn.addEventListener("click", async () => {
   }
 });
 
-exportReportBtn.addEventListener("click", () => exportReport());
+exportReportBtn.addEventListener("click", (event) => {
+  event.stopPropagation();
+  if (exportReportBtn.disabled) return;
+  exportMenu.classList.toggle("hidden");
+});
+
+// Close dropdown when clicking outside
+document.addEventListener("click", (event) => {
+  if (!exportMenu.classList.contains("hidden") &&
+      !exportMenu.contains(event.target) &&
+      event.target !== exportReportBtn) {
+    exportMenu.classList.add("hidden");
+  }
+});
+
+exportMenu.addEventListener("click", (event) => {
+  const btn = event.target.closest("button");
+  if (!btn) return;
+  const format = btn.dataset.format;
+  exportMenu.classList.add("hidden");
+  if (format === "md") exportMarkdown();
+  else if (format === "pdf") exportPdf();
+});
 
 refreshTasksBtn.addEventListener("click", () => loadTasks());
 backToTasksBtn.addEventListener("click", () => showTaskCenter());
@@ -595,7 +618,7 @@ function updateExportButton() {
 }
 
 /** Export the current report as a .md file download. */
-function exportReport() {
+function exportMarkdown() {
   if (!state.lastReportMd) {
     logEvent("没有可导出的报告内容");
     return;
@@ -604,14 +627,97 @@ function exportReport() {
   const url = URL.createObjectURL(blob);
   const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
   const filename = `uav_marl_report_${timestamp}.md`;
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  downloadBlob(url, filename);
   logEvent(`报告已导出为 ${filename}`);
+}
+
+/** Export the current rendered report as PDF via browser print dialog. */
+function exportPdf() {
+  if (!state.lastReportMd) {
+    logEvent("没有可导出的报告内容");
+    return;
+  }
+  // Build a clean HTML document with just the rendered report
+  const reportHtml = reportText.innerHTML;
+  const taskName = escapeHtml(state.config?.task_name || state.selectedTaskId || "UAV MARL 实验报告");
+  const printDoc = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>${taskName}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 36px 28px;
+    font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.8;
+    color: #1a1a1a;
+    background: #fff;
+  }
+  h1 { font-size: 22px; border-bottom: 2px solid #333; padding-bottom: 8px; margin: 18px 0 10px; }
+  h2 { font-size: 18px; margin: 16px 0 8px; }
+  h3 { font-size: 15px; margin: 14px 0 6px; }
+  h4 { font-size: 14px; margin: 12px 0 4px; color: #555; }
+  p { margin: 8px 0; }
+  ul, ol { margin: 8px 0; padding-left: 24px; }
+  li { margin: 3px 0; }
+  strong { font-weight: 700; }
+  code {
+    padding: 2px 5px;
+    background: #f0f0f0;
+    border-radius: 3px;
+    font-family: "SFMono-Regular", Consolas, monospace;
+    font-size: 13px;
+  }
+  pre {
+    margin: 10px 0;
+    padding: 12px 14px;
+    background: #f5f5f5;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  pre code { padding: 0; background: transparent; }
+  blockquote {
+    margin: 10px 0;
+    padding: 8px 14px;
+    border-left: 4px solid #2ec4b6;
+    background: #f8fafa;
+    color: #555;
+  }
+  hr { margin: 16px 0; border: 0; border-top: 1px solid #ddd; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+  th, td { border: 1px solid #ddd; padding: 8px 10px; text-align: left; }
+  th { background: #f5f5f5; }
+  a { color: #2ec4b6; }
+  @media print {
+    body { padding: 0; }
+    @page { margin: 1.8cm; }
+  }
+</style>
+</head>
+<body>
+<h1>${taskName}</h1>
+${reportHtml}
+</body>
+</html>`;
+
+  const blob = new Blob([printDoc], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const printWindow = window.open(url, "_blank", "width=900,height=700");
+  if (printWindow) {
+    printWindow.addEventListener("load", () => {
+      printWindow.print();
+    });
+  }
+  // Clean up blob URL after a delay
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  logEvent("PDF 打印窗口已打开（可使用系统对话框保存为 PDF）");
 }
 
 function formatPercent(value) {
@@ -620,6 +726,17 @@ function formatPercent(value) {
 
 function formatNumber(value) {
   return Number(value || 0).toFixed(2);
+}
+
+/** Trigger a file download from a blob URL. */
+function downloadBlob(url, filename) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function escapeHtml(value) {

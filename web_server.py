@@ -246,6 +246,10 @@ class TrainingService:
                 state = self.tasks[self.active_task_id]
             else:
                 state = self.state
+            # Rebuild assets for recovered / stale tasks that have results but no assets
+            if (not state.get('assets') and state.get('experiment_results')):
+                summary_path = self._find_summary_path_locked(state)
+                state['assets'] = self._build_assets_locked(state, summary_path)
             payload = {
                 **state,
                 'tasks': self._task_summaries_locked(),
@@ -253,6 +257,21 @@ class TrainingService:
                 'queue': list(self.queue),
             }
             return json.loads(json.dumps(_jsonable(payload)))
+
+    def _find_summary_path_locked(self, task: Dict[str, Any]) -> Optional[Path]:
+        """Locate the summary JSON for a task so assets can be rebuilt."""
+        task_id = task.get('task_id')
+        config = task.get('config') or {}
+        seed = config.get('seed', 42)
+        # Try the canonical name first
+        candidate = LOG_DIR / f"{task_id}_seed{seed}_summary.json"
+        if candidate.exists():
+            return candidate
+        # Fallback: scan for any summary file matching this task_id prefix
+        for path in sorted(LOG_DIR.glob(f"{task_id}*summary*.json")):
+            if path.exists():
+                return path
+        return None
 
     def tasks_snapshot(self) -> Dict[str, Any]:
         with self._lock:
@@ -362,6 +381,7 @@ class TrainingService:
                 'metrics': task.get('metrics'),
                 'experiment_results': slim_results,
                 'report': task.get('report'),
+                'llm_report': task.get('llm_report'),
                 'run_plan': task.get('run_plan'),
             }
         payload = {'updated_at': time.time(), 'tasks': summaries}
@@ -1267,6 +1287,10 @@ class TrainingService:
             task = self.tasks.get(task_id)
             if not task:
                 return None
+            # Rebuild assets if missing (e.g. after server restart)
+            if (not task.get('assets') and task.get('experiment_results')):
+                summary_path = self._find_summary_path_locked(task)
+                task['assets'] = self._build_assets_locked(task, summary_path)
             for asset in task.get('assets') or []:
                 if asset.get('asset_id') == asset_id:
                     return dict(asset)
@@ -1334,6 +1358,7 @@ class TrainingService:
                 self.tasks[task_id]['llm_report'] = result
             else:
                 self.state['llm_report'] = result
+            self._save_tasks_index_locked()
         self._publish('llm_report', {'task_id': task_id or self.active_task_id, **result})
         return result
 

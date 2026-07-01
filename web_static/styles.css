@@ -1079,3 +1079,104 @@ pre {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* ── Export dropdown ── */
+.export-dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.export-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+  min-width: 170px;
+  padding: 4px;
+  border: 1px solid #334657;
+  border-radius: 8px;
+  background: #0f151d;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.export-menu button {
+  display: block;
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.export-menu button:hover {
+  background: #1a2533;
+}
+
+.export-menu button:first-child {
+  margin-bottom: 2px;
+}
+
+/* ── Print: hide UI chrome, show only report ── */
+@media print {
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  .sidebar,
+  .topbar,
+  .kpi-grid,
+  .sim-layout,
+  .results-layout > :not(.report-panel),
+  .panel-title button,
+  .export-dropdown,
+  .app-shell {
+    display: none !important;
+  }
+
+  .workspace {
+    display: block !important;
+    padding: 0 !important;
+    min-height: auto !important;
+  }
+
+  .report-panel {
+    border: 0 !important;
+    background: #fff !important;
+    padding: 0 !important;
+    max-height: none !important;
+  }
+
+  .report-body {
+    max-height: none !important;
+    color: #000 !important;
+  }
+
+  .report-body h1,
+  .report-body h2,
+  .report-body h3,
+  .report-body h4 {
+    color: #000 !important;
+  }
+
+  .report-body code {
+    background: #f0f0f0 !important;
+    color: #333 !important;
+  }
+
+  .report-body blockquote {
+    background: #f8f8f8 !important;
+    border-left-color: #999 !important;
+    color: #444 !important;
+  }
+
+  @page {
+    margin: 1.6cm;
+  }
+}
