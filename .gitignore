@@ -11,6 +11,9 @@ wandb/
 *.log
 *.wandb
 
+# 小学期汇报文档（本地文件，不上传仓库）
+小学期汇报要点/
+
 # Training artifacts
 outputs/**
 !outputs/
