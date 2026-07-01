@@ -998,26 +998,26 @@ git commit -m "Initial UAV MARL project"
 
 | 编号 | 文献 |
 |:----:|------|
-| [1] | J. K. Terry et al. "PettingZoo: Gym for Multi-Agent Reinforcement Learning." *NeurIPS*, 2021. |
-| [2] | R. Lowe, Y. Wu, A. Tamar et al. "Multi-Agent Actor-Critic for Mixed Cooperative-Competitive Environments." *NeurIPS*, 2017. |
-| [3] | L. Busoniu, R. Babuska, and B. De Schutter. "A Comprehensive Survey of Multiagent Reinforcement Learning." *IEEE TSMCC*, 2008. |
+| [1] | J. K. Terry et al. ["PettingZoo: Gym for Multi-Agent Reinforcement Learning."](https://arxiv.org/abs/2009.14471) *NeurIPS*, 2021. |
+| [2] | R. Lowe, Y. Wu, A. Tamar et al. ["Multi-Agent Actor-Critic for Mixed Cooperative-Competitive Environments."](https://arxiv.org/abs/1706.02275) *NeurIPS*, 2017. |
+| [3] | L. Busoniu, R. Babuska, and B. De Schutter. ["A Comprehensive Survey of Multiagent Reinforcement Learning."](https://ieeexplore.ieee.org/document/4445757/) *IEEE TSMCC*, 2008. |
 
 ### 第二阶段：基础算法
 
 | 编号 | 文献 |
 |:----:|------|
-| [4] | T. P. Lillicrap et al. "Continuous Control with Deep Reinforcement Learning." *ICLR*, 2016. |
-| [5] | M. Tan. "Multi-Agent Reinforcement Learning: Independent vs. Cooperative Agents." *ICML*, 1993. |
-| [6] | J. Foerster et al. "Stabilising Experience Replay for Deep Multi-Agent Reinforcement Learning." *ICML*, 2017. |
+| [4] | T. P. Lillicrap et al. ["Continuous Control with Deep Reinforcement Learning."](https://arxiv.org/abs/1509.02971) *ICLR*, 2016. |
+| [5] | M. Tan. ["Multi-Agent Reinforcement Learning: Independent vs. Cooperative Agents."](https://web.media.mit.edu/~cynthiab/Readings/tan-MAS-reinfLearn.pdf) *ICML*, 1993. |
+| [6] | J. Foerster et al. ["Stabilising Experience Replay for Deep Multi-Agent Reinforcement Learning."](https://arxiv.org/abs/1702.08887) *ICML*, 2017. |
 
 ### 第三阶段：改进机制
 
 | 编号 | 文献 |
 |:----:|------|
-| [7] | A. Y. Ng, D. Harada, and S. Russell. "Policy Invariance Under Reward Transformations: Theory and Application to Reward Shaping." *ICML*, 1999. |
-| [8] | J. Cortes et al. "Coverage Control for Mobile Sensing Networks." *IEEE TAC*, 2004. |
-| [9] | A. Khamis, A. Hussein, and A. Elmogy. "Multi-robot Task Allocation: A Review of the State-of-the-Art." Springer, 2015. |
-| [10] | J. García and F. Fernández. "A Comprehensive Survey on Safe Reinforcement Learning." *JMLR*, 2015. |
+| [7] | A. Y. Ng, D. Harada, and S. Russell. ["Policy Invariance Under Reward Transformations: Theory and Application to Reward Shaping."](https://people.eecs.berkeley.edu/~pabbeel/cs287-fa09/readings/NgHaradaRussell-shaping-ICML1999.pdf) *ICML*, 1999. |
+| [8] | J. Cortes et al. ["Coverage Control for Mobile Sensing Networks."](https://arxiv.org/abs/math/0212212) *IEEE TAC*, 2004. |
+| [9] | A. Khamis, A. Hussein, and A. Elmogy. ["Multi-robot Task Allocation: A Review of the State-of-the-Art."](https://link.springer.com/chapter/10.1007/978-3-319-18299-5_2) Springer, 2015. |
+| [10] | J. García and F. Fernández. ["A Comprehensive Survey on Safe Reinforcement Learning."](https://jmlr.org/papers/v16/garcia15a.html) *JMLR*, 2015. |
 
 ---
 
