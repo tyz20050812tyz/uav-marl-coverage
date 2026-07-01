@@ -151,6 +151,9 @@ class TrainingService:
         'wandb_run_name': '',
         'update_repeats': 1,
         'frame_stride': 1,
+        'eval_interval': 50,
+        'eval_episodes': 5,
+        'noise_final_scale': 0.10,
     }
 
     def __init__(self, hub: EventHub):
@@ -236,6 +239,9 @@ class TrainingService:
         cfg['wandb_run_name'] = str(cfg.get('wandb_run_name') or '').strip()[:120]
         cfg['update_repeats'] = int(np.clip(int(cfg['update_repeats']), 0, 4))
         cfg['frame_stride'] = int(np.clip(int(cfg['frame_stride']), 1, 5))
+        cfg['eval_interval'] = int(np.clip(int(cfg.get('eval_interval', 50)), 1, 1000))
+        cfg['eval_episodes'] = int(np.clip(int(cfg.get('eval_episodes', 5)), 1, 50))
+        cfg['noise_final_scale'] = float(np.clip(float(cfg.get('noise_final_scale', 0.10)), 0.0, 1.0))
         return cfg
 
     def _run(self, cfg: Dict[str, Any]):
@@ -318,6 +324,9 @@ class TrainingService:
         total_steps = 0
         history = []
         wandb_run = self._start_wandb(cfg, env)
+        best_score = float('-inf')
+        best_metrics: Optional[Dict[str, Any]] = None
+        best_checkpoint = None
 
         try:
             for episode in range(1, cfg['episodes'] + 1):
@@ -326,6 +335,9 @@ class TrainingService:
 
                 if hasattr(agent, 'set_episode'):
                     agent.set_episode(episode - 1)
+                noise_scale = self._exploration_scale(episode, cfg)
+                if hasattr(agent, 'set_noise_scale'):
+                    agent.set_noise_scale(noise_scale)
                 if hasattr(agent, 'reset_episode'):
                     agent.reset_episode()
                 if hasattr(agent, 'reset_noise'):
@@ -407,18 +419,64 @@ class TrainingService:
                         update_info = agent.update(batch)
 
                 final_state = env.get_world_state()
-                metrics = compute_metrics(
+                train_metrics = compute_metrics(
                     final_state['agent_positions'],
                     final_state['landmark_positions'],
                     coverage_radius,
                 )
-                metrics['avg_reward'] = ep_reward
-                metrics['completion_steps'] = compute_completion_steps(
+                train_metrics['avg_reward'] = ep_reward
+                train_metrics['completion_steps'] = compute_completion_steps(
                     position_history,
                     final_state['landmark_positions'],
                     coverage_radius,
                 )
+                metrics = {
+                    'metric_source': 'train',
+                    'noise_scale': noise_scale,
+                    'train_avg_reward': train_metrics['avg_reward'],
+                    'train_coverage_rate': train_metrics['coverage_rate'],
+                    'train_collision_count': train_metrics['collision_count'],
+                    'train_avg_min_distance': train_metrics['avg_min_distance'],
+                    'train_redundancy_rate': train_metrics['redundancy_rate'],
+                    'train_covered_landmarks': train_metrics['covered_landmarks'],
+                    'train_completion_steps': train_metrics['completion_steps'],
+                    **train_metrics,
+                }
                 metrics.update(update_info)
+
+                should_eval = (
+                    episode == 1 or
+                    episode == cfg['episodes'] or
+                    episode % cfg['eval_interval'] == 0
+                )
+                if should_eval:
+                    eval_metrics = self._evaluate_policy(agent, cfg, coverage_radius)
+                    eval_prefixed = {f'eval_{key}': value for key, value in eval_metrics.items()}
+                    metrics.update(eval_prefixed)
+                    metrics.update(eval_metrics)
+                    metrics['metric_source'] = 'eval'
+
+                    eval_score = self._checkpoint_score(eval_metrics)
+                    metrics['eval_score'] = eval_score
+                    if eval_score > best_score:
+                        best_score = eval_score
+                        best_metrics = {
+                            'episode': episode,
+                            'score': eval_score,
+                            **_jsonable(eval_metrics),
+                        }
+                        if hasattr(agent, 'save') and cfg['algo'] != 'Random':
+                            best_checkpoint = MODEL_DIR / f"{cfg['run_id']}_seed{cfg['seed']}_best.pt"
+                            agent.save(str(best_checkpoint))
+                            if wandb_run is not None:
+                                wandb_run.save(str(best_checkpoint), policy='now')
+                        self.hub.publish('best', {
+                            'run_id': cfg['run_id'],
+                            'episode': episode,
+                            'metrics': best_metrics,
+                            'checkpoint': str(best_checkpoint) if best_checkpoint else None,
+                        })
+                    metrics['best_eval_score'] = best_score if best_score > float('-inf') else 0.0
 
                 entry = {
                     'episode': episode,
@@ -468,7 +526,93 @@ class TrainingService:
             'algo': cfg['algo'],
             'config': _jsonable(cfg),
             'history': history,
+            'best_metrics': _jsonable(best_metrics or {}),
+            'best_checkpoint': str(best_checkpoint) if best_checkpoint else None,
         }
+
+    def _exploration_scale(self, episode: int, cfg: Dict[str, Any]) -> float:
+        """Linear exploration decay; keeps early exploration and reduces late noise."""
+        if cfg['algo'] == 'Random':
+            return 1.0
+        total = max(int(cfg.get('episodes', 1)), 1)
+        progress = min(max((episode - 1) / max(total - 1, 1), 0.0), 1.0)
+        final_scale = float(cfg.get('noise_final_scale', 0.10))
+        return 1.0 + (final_scale - 1.0) * progress
+
+    def _evaluate_policy(self, agent, cfg: Dict[str, Any],
+                         coverage_radius: float) -> Dict[str, float]:
+        """Evaluate the current policy without exploration noise on fresh episodes."""
+        eval_env = SimpleSpreadWrapper(
+            num_agents=cfg['num_agents'],
+            max_cycles=_max_cycles(cfg['num_agents']),
+        )
+        np_state = np.random.get_state()
+        try:
+            total_reward = 0.0
+            totals = {
+                'coverage_rate': 0.0,
+                'collision_count': 0.0,
+                'avg_min_distance': 0.0,
+                'redundancy_rate': 0.0,
+                'covered_landmarks': 0.0,
+                'completion_steps': 0.0,
+            }
+            n = int(cfg.get('eval_episodes', 5))
+            for _ in range(n):
+                obs, _ = eval_env.reset()
+                ep_reward = 0.0
+                position_history = []
+                while True:
+                    actions = {
+                        name: agent.act(name, obs[name], add_noise=False)
+                        if hasattr(agent, 'act') else obs[name]
+                        for name in obs
+                    }
+                    next_obs, env_rewards, terms, truncs, _ = eval_env.step(actions)
+                    state = eval_env.get_world_state()
+                    position_history.append(state['agent_positions'].copy())
+                    ep_reward += float(sum(env_rewards.values()))
+                    dones = {name: bool(terms[name]) or bool(truncs[name]) for name in obs}
+                    obs = next_obs
+                    if all(dones.values()):
+                        break
+
+                final_state = eval_env.get_world_state()
+                episode_metrics = compute_metrics(
+                    final_state['agent_positions'],
+                    final_state['landmark_positions'],
+                    coverage_radius,
+                )
+                episode_metrics['completion_steps'] = compute_completion_steps(
+                    position_history,
+                    final_state['landmark_positions'],
+                    coverage_radius,
+                )
+                total_reward += ep_reward
+                for key in totals:
+                    totals[key] += float(episode_metrics[key])
+
+            result = {key: value / n for key, value in totals.items()}
+            result['avg_reward'] = total_reward / n
+            return result
+        finally:
+            np.random.set_state(np_state)
+            eval_env.close()
+
+    def _checkpoint_score(self, metrics: Dict[str, Any]) -> float:
+        coverage = float(metrics.get('coverage_rate', 0.0))
+        collision = float(metrics.get('collision_count', 0.0))
+        redundancy = float(metrics.get('redundancy_rate', 0.0))
+        min_distance = float(metrics.get('avg_min_distance', 0.0))
+        completion = float(metrics.get('completion_steps', 0.0))
+        return round(
+            coverage * 60.0 +
+            max(0.0, 20.0 - collision * 8.0) +
+            max(0.0, 10.0 - redundancy * 10.0) +
+            max(0.0, 8.0 - min_distance * 4.0) +
+            max(0.0, 2.0 - max(completion - 50.0, 0.0) * 0.04),
+            4,
+        )
 
     def _build_run_plan(self, cfg: Dict[str, Any]) -> list:
         mode = cfg.get('experiment_mode', 'single')
@@ -563,6 +707,16 @@ class TrainingService:
             'avg_min_distance': 'task/avg_min_distance',
             'redundancy_rate': 'task/redundancy_rate',
             'completion_steps': 'task/completion_steps',
+            'train_avg_reward': 'train/reward',
+            'train_coverage_rate': 'train/coverage_rate',
+            'eval_avg_reward': 'eval/reward',
+            'eval_coverage_rate': 'eval/coverage_rate',
+            'eval_collision_count': 'eval/collision_count',
+            'eval_redundancy_rate': 'eval/redundancy_rate',
+            'eval_completion_steps': 'eval/completion_steps',
+            'eval_score': 'eval/score',
+            'best_eval_score': 'eval/best_score',
+            'noise_scale': 'exploration/noise_scale',
             'critic_loss': 'loss/critic',
             'actor_loss': 'loss/actor',
             'steps': 'episode/steps',

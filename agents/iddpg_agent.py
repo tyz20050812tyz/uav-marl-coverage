@@ -71,6 +71,11 @@ class IDDPGAgent(BaseAgent):
 
         # OU 噪声
         self.noise = OUNoise(act_dim)
+        self.noise_scale = 1.0
+
+    def set_noise_scale(self, scale: float):
+        """设置探索噪声缩放系数，用于训练后期逐步降低随机扰动。"""
+        self.noise_scale = float(np.clip(scale, 0.0, 1.0))
 
     def act(self, obs: np.ndarray, add_noise: bool = True) -> np.ndarray:
         """
@@ -89,7 +94,7 @@ class IDDPGAgent(BaseAgent):
             action = self.actor(obs_tensor.unsqueeze(0)).squeeze(0).cpu().numpy()
 
         if add_noise:
-            noise = self.noise.sample()
+            noise = self.noise.sample() * self.noise_scale
             action = action + noise
             action = np.clip(action, 0.0, 1.0)
 

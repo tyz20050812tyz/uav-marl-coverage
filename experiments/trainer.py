@@ -122,7 +122,8 @@ class Trainer:
     def train(self, num_episodes: int,
               batch_size: int = 1024,
               buffer_warmup: int = 1024,
-              progress_callback: Optional[Callable] = None) -> Dict:
+              progress_callback: Optional[Callable] = None,
+              noise_final_scale: float = 0.10) -> Dict:
         """
         执行完整训练流程。
 
@@ -134,6 +135,7 @@ class Trainer:
             batch_size: 每次更新的批次大小
             buffer_warmup: 回放池预热大小（需先积累足够数据再开始更新）
             progress_callback: 进度回调 (episode, metrics, world_state) -> None
+            noise_final_scale: 训练末期保留的探索噪声比例
 
         Returns:
             训练日志列表
@@ -151,7 +153,7 @@ class Trainer:
 
         try:
             return self._train_loop(num_episodes, batch_size, buffer_warmup,
-                                    progress_callback)
+                                    progress_callback, noise_final_scale)
         finally:
             # 只在主线程注册成功时恢复。Streamlit 后台线程不能调用 signal.signal。
             if signals_registered:
@@ -162,7 +164,8 @@ class Trainer:
     def _train_loop(self, num_episodes: int,
                     batch_size: int = 1024,
                     buffer_warmup: int = 1024,
-                    progress_callback: Optional[Callable] = None) -> Dict:
+                    progress_callback: Optional[Callable] = None,
+                    noise_final_scale: float = 0.10) -> Dict:
         """内部训练循环。"""
         np.random.seed(self.seed)
         torch.manual_seed(self.seed)
@@ -178,6 +181,7 @@ class Trainer:
             return self.logs
 
         total_steps = 0
+        best_eval_score = float('-inf')
 
         for episode in range(start_episode, num_episodes):
             # 检查中断信号
@@ -189,6 +193,10 @@ class Trainer:
             # RS-MADDPG: 设置当前 episode（用于权重调度）
             if hasattr(self.agent, 'set_episode'):
                 self.agent.set_episode(episode)
+            if hasattr(self.agent, 'set_noise_scale'):
+                progress = min(max(episode / max(num_episodes - 1, 1), 0.0), 1.0)
+                scale = 1.0 + (float(noise_final_scale) - 1.0) * progress
+                self.agent.set_noise_scale(scale)
             if hasattr(self.agent, 'reset_episode'):
                 self.agent.reset_episode()
 
@@ -267,6 +275,10 @@ class Trainer:
                     **eval_metrics,
                 }
                 self.logs.append(log_entry)
+                eval_score = self._metric_score(eval_metrics)
+                if eval_score > best_eval_score and hasattr(self.agent, 'save'):
+                    best_eval_score = eval_score
+                    self.save_checkpoint(episode + 1, best=True)
 
                 logger.info("  Episode %d/%d | Reward: %.2f | Coverage: %.1%% | Collisions: %.1f",
                             episode+1, num_episodes, ep_reward,
@@ -434,11 +446,11 @@ class Trainer:
         }
         return metrics, captured_trajectory
 
-    def save_checkpoint(self, episode: int, final: bool = False):
+    def save_checkpoint(self, episode: int, final: bool = False, best: bool = False):
         """保存模型 checkpoint。"""
         if not hasattr(self.agent, 'save'):
             return
-        suffix = 'final' if final else f'ep{episode}'
+        suffix = 'best' if best else ('final' if final else f'ep{episode}')
         path = os.path.join(
             self.model_dir,
             f'{self.agent_type}_seed{self.seed}_{suffix}.pt',
@@ -446,6 +458,23 @@ class Trainer:
         self.agent.save(path)
         if final:
             logger.info("[Trainer] 最终模型已保存: %s", path)
+        if best:
+            logger.info("[Trainer] 最佳评估模型已保存: %s", path)
+
+    def _metric_score(self, metrics: Dict[str, float]) -> float:
+        """用于 best checkpoint 的轻量评估分。"""
+        coverage = float(metrics.get('coverage_rate', 0.0))
+        collision = float(metrics.get('collision_count', 0.0))
+        redundancy = float(metrics.get('redundancy_rate', 0.0))
+        min_distance = float(metrics.get('avg_min_distance', 0.0))
+        completion = float(metrics.get('completion_steps', 0.0))
+        return (
+            coverage * 60.0 +
+            max(0.0, 20.0 - collision * 8.0) +
+            max(0.0, 10.0 - redundancy * 10.0) +
+            max(0.0, 8.0 - min_distance * 4.0) +
+            max(0.0, 2.0 - max(completion - 50.0, 0.0) * 0.04)
+        )
 
     def _save_logs(self):
         """保存训练日志到 JSON 文件。"""

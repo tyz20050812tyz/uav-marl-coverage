@@ -76,6 +76,9 @@ function parseConfig() {
     use_wandb: data.get("use_wandb") === "on",
     wandb_project: data.get("wandb_project"),
     wandb_run_name: data.get("wandb_run_name"),
+    eval_interval: Number(data.get("eval_interval")),
+    eval_episodes: Number(data.get("eval_episodes")),
+    noise_final_scale: Number(data.get("noise_final_scale")),
   };
 }
 
@@ -151,11 +154,17 @@ function updateStatus() {
 }
 
 function updateKpis(metrics) {
+  const isEval = metrics.metric_source === "eval" || metrics.eval_coverage_rate !== undefined;
+  const coverage = isEval ? metrics.eval_coverage_rate ?? metrics.coverage_rate : metrics.coverage_rate;
+  const collision = isEval ? metrics.eval_collision_count ?? metrics.collision_count : metrics.collision_count;
+  const reward = isEval ? metrics.eval_avg_reward ?? metrics.avg_reward : metrics.avg_reward;
+  const steps = isEval ? metrics.eval_completion_steps ?? metrics.completion_steps : metrics.completion_steps;
   document.getElementById("episodeKpi").textContent = `${metrics.episode || state.currentEpisode} / ${state.totalEpisodes || 0}`;
-  document.getElementById("coverageKpi").textContent = `${Math.round((metrics.coverage_rate || 0) * 100)}%`;
-  document.getElementById("collisionKpi").textContent = Number(metrics.collision_count || 0).toFixed(0);
-  document.getElementById("rewardKpi").textContent = Number(metrics.avg_reward || 0).toFixed(2);
-  document.getElementById("stepsKpi").textContent = Number(metrics.completion_steps || 0).toFixed(0);
+  document.getElementById("coverageKpiLabel").textContent = isEval ? "评估覆盖率" : "训练覆盖率";
+  document.getElementById("coverageKpi").textContent = `${Math.round((coverage || 0) * 100)}%`;
+  document.getElementById("collisionKpi").textContent = Number(collision || 0).toFixed(0);
+  document.getElementById("rewardKpi").textContent = Number(reward || 0).toFixed(2);
+  document.getElementById("stepsKpi").textContent = Number(steps || 0).toFixed(0);
 }
 
 function logEvent(message) {
@@ -220,7 +229,14 @@ function connectEvents() {
     if (state.history.length > 1000) state.history.shift();
     updateKpis(data.metrics);
     drawChart();
-    logEvent(`Episode ${data.episode} 完成，覆盖率 ${Math.round((data.metrics.coverage_rate || 0) * 100)}%`);
+    const sourceLabel = data.metrics.metric_source === "eval" ? "评估覆盖率" : "训练覆盖率";
+    logEvent(`Episode ${data.episode} 完成，${sourceLabel} ${Math.round((data.metrics.coverage_rate || 0) * 100)}%`);
+  });
+  source.addEventListener("best", (event) => {
+    const data = JSON.parse(event.data);
+    const score = Number(data.metrics?.score || 0).toFixed(1);
+    const coverage = Math.round(Number(data.metrics?.coverage_rate || 0) * 100);
+    logEvent(`刷新最佳模型：Episode ${data.metrics?.episode || "-"}，评分 ${score}，覆盖率 ${coverage}%`);
   });
   source.addEventListener("report", (event) => {
     const data = JSON.parse(event.data);
@@ -480,7 +496,9 @@ function drawChart() {
   }
 
   const pad = 34 * (window.devicePixelRatio || 1);
-  drawChartLine(ctx, data.map((d) => d.coverage_rate * 100), "#2ec4b6", pad, w, h, 0, 100);
+  drawChartLine(ctx, data.map((d) => Number(d.train_coverage_rate ?? d.coverage_rate ?? 0) * 100), "#55a7ff", pad, w, h, 0, 100);
+  const evalData = data.map((d) => d.eval_coverage_rate === undefined ? null : Number(d.eval_coverage_rate) * 100);
+  drawSparseChartLine(ctx, evalData, "#2ec4b6", pad, w, h, 0, 100);
   const rewards = data.map((d) => d.avg_reward || 0);
   const minReward = Math.min(...rewards);
   const maxReward = Math.max(...rewards);
@@ -488,9 +506,11 @@ function drawChart() {
 
   ctx.fillStyle = "#8fa0ad";
   ctx.font = `${11 * (window.devicePixelRatio || 1)}px system-ui`;
-  ctx.fillText("覆盖率", pad, 18 * (window.devicePixelRatio || 1));
+  ctx.fillText("训练覆盖", pad, 18 * (window.devicePixelRatio || 1));
+  ctx.fillStyle = "#2ec4b6";
+  ctx.fillText("评估覆盖", pad + 72 * (window.devicePixelRatio || 1), 18 * (window.devicePixelRatio || 1));
   ctx.fillStyle = "#f4c430";
-  ctx.fillText("奖励", pad + 62 * (window.devicePixelRatio || 1), 18 * (window.devicePixelRatio || 1));
+  ctx.fillText("奖励", pad + 146 * (window.devicePixelRatio || 1), 18 * (window.devicePixelRatio || 1));
 }
 
 function drawChartLine(ctx, values, color, pad, w, h, min, max) {
@@ -506,6 +526,36 @@ function drawChartLine(ctx, values, color, pad, w, h, min, max) {
     else ctx.lineTo(x, y);
   });
   ctx.stroke();
+  ctx.restore();
+}
+
+function drawSparseChartLine(ctx, values, color, pad, w, h, min, max) {
+  const span = Math.max(max - min, 1e-6);
+  const points = [];
+  values.forEach((v, i) => {
+    if (v === null || Number.isNaN(v)) return;
+    const x = pad + (i / Math.max(values.length - 1, 1)) * (w - pad * 2);
+    const y = h - pad - ((v - min) / span) * (h - pad * 2);
+    points.push([x, y]);
+  });
+  if (!points.length) return;
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2.8 * (window.devicePixelRatio || 1);
+  ctx.beginPath();
+  points.forEach(([x, y], index) => {
+    if (index === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.fillStyle = color;
+  points.forEach(([x, y]) => {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, 2.8 * (window.devicePixelRatio || 1), 0, Math.PI * 2);
+    ctx.fill();
+  });
   ctx.restore();
 }
 

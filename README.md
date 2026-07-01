@@ -63,6 +63,7 @@ RS-MADDPG（改进方法）
 - **泛化性测试**：N=3/4/5 不同规模场景下的算法扩展性评估
 - **工业风 Web 训练控制台**：纯 HTML/CSS/JS 前端 + Python 标准库 HTTP 服务器，Canvas 实时 2D 渲染 + SSE 事件流推送，零外部框架依赖
 - **实验模式与自动总结**：支持单次训练、随机 vs 训练后、算法对比、消融实验、泛化实验；实验结束后自动生成结构化指标总结和报告文本
+- **无噪声评估与最佳模型保存**：训练过程保留探索噪声，报告与评分使用周期性无噪声评估，并自动保存 best checkpoint
 - **DeepSeek 报告生成**：可选调用 DeepSeek，将结构化指标转换为课程报告风格的自然语言结论
 - **统一训练器**：支持 Ctrl+C 中断恢复，自动保存 checkpoint 和日志
 - **完整测试覆盖**：单元测试覆盖 agents、env、networks、rewards、utils 等核心模块
@@ -267,10 +268,11 @@ python web_server.py --port 8600
 浏览器打开 `http://127.0.0.1:8600`，即可看到工业风训练控制台：
 
 - **左侧边栏**：配置实验模式、算法、智能体数量、超参数、安全与覆盖参数、W&B 追踪
-- **右侧主区域**：KPI 指标卡片（Episode / 覆盖率 / 碰撞 / 奖励 / 完成步数）、Canvas 2D 实时仿真动画、训练曲线图、事件流日志
+- **右侧主区域**：KPI 指标卡片（Episode / 评估覆盖率 / 碰撞 / 奖励 / 完成步数）、Canvas 2D 实时仿真动画、训练曲线图、事件流日志
 - **结果总结区**：实验结束后自动展示结构化结论、指标总览表、诊断建议和报告文本
 - **一键操作**：点击「开始训练」启动后台训练线程，点击「停止」中断训练
 - **实时推送**：通过 Server-Sent Events (SSE) 将每个环境步的智能体位置实时推送到浏览器，Canvas 逐帧渲染运动轨迹
+- **稳定评估**：训练 episode 仍然带探索噪声用于学习；每隔固定轮数会用 `add_noise=False` 独立评估当前策略，结果总结和 best 模型以该评估结果为准
 
 ```
 ┌──────────────────────────┬────────────────────────────────────────┐
@@ -326,6 +328,14 @@ wandb login
 - `loss/actor`
 - `episode/steps`
 - `episode/total_steps`
+
+同时会额外记录：
+
+- `train/coverage_rate`：带探索噪声的训练采样覆盖率
+- `eval/coverage_rate`：无探索噪声的独立评估覆盖率
+- `eval/score`：用于 best checkpoint 的评估分
+- `eval/best_score`：当前 run 内历史最佳评估分
+- `exploration/noise_scale`：当前探索噪声缩放比例
 
 #### DeepSeek 自动报告
 
@@ -641,6 +651,13 @@ training:             # 训练超参数
   batch_size: 1024      # 批次大小
   episodes: 20000       # 训练 episode 总数
   eval_interval: 500    # 评估间隔
+  eval_episodes: 10     # 每次评估 episode 数
+
+ou_noise:
+  theta: 0.15
+  sigma: 0.2
+  mu: 0.0
+  final_scale: 0.10     # 训练末期保留的探索噪声比例
 
 td3:                  # TD3 稳定性增强
   policy_delay: 2     # Actor 延迟更新步数
@@ -781,7 +798,8 @@ DEFAULT_CONFIG = {
 | `run_end` | 某个 run 结束 | run 结果、历史日志 |
 | `episode_start` | 每 episode 开始 | 地标位置、覆盖/安全半径 |
 | `frame` | 每环境步（按 frame_stride 采样） | 智能体位置、episode/step |
-| `episode_end` | 每 episode 结束 | 评估指标、进度百分比 |
+| `episode_end` | 每 episode 结束 | 训练指标；到达评估间隔时附带无噪声评估指标 |
+| `best` | 无噪声评估刷新最优结果 | 最佳评估分、覆盖率、best checkpoint 路径 |
 | `report` | 整个实验完成 | 结构化实验总结 |
 | `llm_report` | DeepSeek 返回 | 自然语言报告文本 |
 | `complete` | 训练完成 | 最终状态快照 |
@@ -793,6 +811,7 @@ DEFAULT_CONFIG = {
 Web 控制台在实验结束后会调用 [`reports/report_generator.py`](reports/report_generator.py)，根据每个 run 的 episode 日志生成结构化总结：
 
 - **核心指标**：平均奖励、目标覆盖率、碰撞次数、平均最小距离、冗余覆盖率、完成步数
+- **评估优先**：如果日志中存在无噪声评估指标，评分、趋势和报告文本优先使用评估指标；否则才回退到训练采样指标
 - **稳健统计**：最后 10% episode 的均值、标准差、最大值、最小值
 - **趋势判断**：后半段奖励是否提升、覆盖率是否提升、覆盖率是否稳定
 - **综合评分**：覆盖率、安全性、冗余控制、平均最小距离、完成效率的加权评分（0-100）
@@ -811,6 +830,15 @@ outputs/logs/<experiment_mode>_seed<seed>_summary.json
 ```bash
 outputs/logs/<run_id>_seed<seed>_logs.json
 ```
+
+训练模型会保存两类 checkpoint：
+
+```bash
+outputs/models/<run_id>_seed<seed>_best.pt   # 无噪声评估分最高的模型
+outputs/models/<run_id>_seed<seed>_final.pt  # 最后一个 episode 的模型
+```
+
+正式汇报时优先使用 `best.pt` 对应结果；`final.pt` 主要用于复现训练终点。
 
 ### 9.5 DeepSeek 报告生成
 

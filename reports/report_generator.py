@@ -47,6 +47,7 @@ def summarize_run(run: Dict[str, Any]) -> Dict[str, Any]:
     history = run.get('history') or []
     label = run.get('label') or run.get('algo') or 'Run'
     config = run.get('config') or {}
+    best_metrics = run.get('best_metrics') or {}
 
     if not history:
         return {
@@ -60,15 +61,19 @@ def summarize_run(run: Dict[str, Any]) -> Dict[str, Any]:
             'last_window': {},
             'stability': {},
             'trend': {},
+            'metric_source': 'none',
+            'best_metrics': best_metrics,
+            'best_checkpoint': run.get('best_checkpoint'),
             'warnings': ['没有可用训练日志'],
         }
 
-    window_size = max(1, len(history) // 10)
-    last_window = history[-window_size:]
-    final = history[-1]
+    metric_history, metric_source = build_metric_history(history)
+    window_size = max(1, len(metric_history) // 10)
+    last_window = metric_history[-window_size:]
+    final = metric_history[-1]
     last_stats = {metric: stats(last_window, metric) for metric in CORE_METRICS}
-    full_stats = {metric: stats(history, metric) for metric in CORE_METRICS}
-    trend = build_trend(history)
+    full_stats = {metric: stats(metric_history, metric) for metric in CORE_METRICS}
+    trend = build_trend(metric_history)
     final_core = {metric: safe_float(final.get(metric)) for metric in CORE_METRICS}
     score = compute_score(last_stats, final_core)
 
@@ -79,14 +84,37 @@ def summarize_run(run: Dict[str, Any]) -> Dict[str, Any]:
         'config': config,
         'episodes': len(history),
         'total_steps': safe_float(final.get('total_steps')),
+        'metric_points': len(metric_history),
+        'metric_source': metric_source,
         'score': round(score, 2),
         'final': final_core,
         'last_window': last_stats,
         'full_stats': full_stats,
         'stability': build_stability(last_stats),
         'trend': trend,
+        'best_metrics': best_metrics,
+        'best_checkpoint': run.get('best_checkpoint'),
         'warnings': run_warnings(config, history, last_stats),
     }
+
+
+def build_metric_history(history: List[Dict[str, Any]]) -> tuple:
+    """Prefer deterministic evaluation rows when available."""
+    eval_rows = [row for row in history if row.get('eval_coverage_rate') is not None]
+    if eval_rows:
+        converted = []
+        for row in eval_rows:
+            converted.append({
+                **row,
+                'avg_reward': safe_float(row.get('eval_avg_reward')),
+                'coverage_rate': safe_float(row.get('eval_coverage_rate')),
+                'collision_count': safe_float(row.get('eval_collision_count')),
+                'avg_min_distance': safe_float(row.get('eval_avg_min_distance')),
+                'redundancy_rate': safe_float(row.get('eval_redundancy_rate')),
+                'completion_steps': safe_float(row.get('eval_completion_steps')),
+            })
+        return converted, 'eval'
+    return history, 'train'
 
 
 def stats(history: List[Dict[str, Any]], metric: str) -> Dict[str, float]:
@@ -269,13 +297,14 @@ def build_report_text(config: Dict[str, Any],
         return '当前实验尚未产生有效数据，无法生成报告文本。'
 
     mode = mode_label(config.get('experiment_mode', 'single'))
+    metric_note = '无探索噪声评估' if best.get('metric_source') == 'eval' else '训练采样'
     cov = best['last_window']['coverage_rate']['mean']
     collision = best['last_window']['collision_count']['mean']
     redundancy = best['last_window']['redundancy_rate']['mean']
     completion = best['last_window']['completion_steps']['mean']
 
     text = (
-        f"本次{mode}中，{best['label']} 的综合表现最好，综合评分为 "
+        f"本次{mode}中，基于{metric_note}指标，{best['label']} 的综合表现最好，综合评分为 "
         f"{best['score']:.1f}/100。最后 10% episode 的平均目标覆盖率为 "
         f"{cov:.1%}，平均碰撞次数为 {collision:.2f}，冗余覆盖率为 "
         f"{redundancy:.1%}，平均完成步数为 {completion:.1f}。"

@@ -84,6 +84,21 @@
               <span class="label-row">随机种子 <span class="help-tip" tabindex="0" data-tip="控制随机初始化和采样，便于复现实验。正式对比通常使用多个 seed 取均值。">?</span></span>
               <input name="seed" type="number" value="42" min="0" max="999999" />
             </label>
+            <div class="two-col">
+              <label>
+                <span class="label-row">评估间隔 <span class="help-tip" tabindex="0" data-tip="每隔多少个 episode 使用无探索噪声策略做一次独立评估。报告和最佳模型主要依据评估指标，而不是带噪声训练采样。">?</span></span>
+                <input name="eval_interval" type="number" value="50" min="1" max="1000" step="1" />
+              </label>
+              <label>
+                <span class="label-row">评估次数 <span class="help-tip" tabindex="0" data-tip="每次评估平均多少个 episode。数值越大结论越稳，但训练过程会更慢。">?</span></span>
+                <input name="eval_episodes" type="number" value="5" min="1" max="50" step="1" />
+              </label>
+            </div>
+            <label>
+              <span class="label-row">最终噪声 <span class="help-tip" tabindex="0" data-tip="训练末期保留的探索噪声比例。较小可以减少后期策略退化；0.10 表示从初始噪声线性衰减到 10%。">?</span></span>
+              <input name="noise_final_scale" type="range" value="0.10" min="0" max="1" step="0.05" data-output="noiseValue" />
+              <span id="noiseValue" class="range-value">0.10</span>
+            </label>
           </section>
 
           <section class="panel">
@@ -146,7 +161,7 @@
 
         <section class="kpi-grid">
           <div class="kpi"><span>Episode</span><strong id="episodeKpi">0 / 0</strong></div>
-          <div class="kpi"><span>覆盖率</span><strong id="coverageKpi">0%</strong></div>
+          <div class="kpi"><span id="coverageKpiLabel">覆盖率</span><strong id="coverageKpi">0%</strong></div>
           <div class="kpi"><span>碰撞</span><strong id="collisionKpi">0</strong></div>
           <div class="kpi"><span>奖励</span><strong id="rewardKpi">0.00</strong></div>
           <div class="kpi"><span>完成步数</span><strong id="stepsKpi">0</strong></div>

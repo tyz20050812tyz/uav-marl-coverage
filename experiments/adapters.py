@@ -70,6 +70,11 @@ class IDDPGManager:
         for agent in self.agents.values():
             agent.reset_noise()
 
+    def set_noise_scale(self, scale: float):
+        """设置所有独立智能体的探索噪声缩放系数。"""
+        for agent in self.agents.values():
+            agent.set_noise_scale(scale)
+
     def save(self, path: str):
         """保存所有智能体。"""
         import os
