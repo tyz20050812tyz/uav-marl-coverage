@@ -7,7 +7,217 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="app-shell">
+    <div id="taskCenter" class="task-center">
+      <header class="task-header">
+        <div>
+          <p class="eyebrow">Experiment queue</p>
+          <h1>任务中心</h1>
+          <p>创建多个训练任务，系统会按队列一次运行一个任务。点击任务可进入实时详情页。</p>
+        </div>
+        <div class="status-pill" id="queueStatus">idle</div>
+      </header>
+
+      <section class="task-layout">
+        <form id="taskForm" class="panel task-form">
+          <h2>新建任务</h2>
+          <label>
+            <span class="label-row">任务名 <span class="help-tip" tabindex="0" data-tip="用于区分多次实验。留空会自动按算法、模式、智能体数量、seed 和 episode 生成。">?</span></span>
+            <input name="task_name" type="text" placeholder="例如 RS-MADDPG_N4_seed42_long" />
+          </label>
+          <div class="task-form-grid">
+            <label>
+              <span class="label-row">实验模式</span>
+              <select name="experiment_mode" id="taskExperimentMode">
+                <option value="single">单次训练</option>
+                <option value="exp1">实验一：随机 vs 训练后</option>
+                <option value="exp2">实验二：算法对比</option>
+                <option value="exp3">实验三：消融实验</option>
+                <option value="exp4">实验四：泛化实验</option>
+              </select>
+            </label>
+            <label>
+              <span class="label-row">算法</span>
+              <select name="algo">
+                <option>RS-MADDPG</option>
+                <option>MADDPG</option>
+                <option>IDDPG</option>
+                <option>Random</option>
+              </select>
+            </label>
+            <label>
+              <span class="label-row">智能体</span>
+              <select name="num_agents">
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+              </select>
+            </label>
+            <label>
+              <span class="label-row">Episodes</span>
+              <input name="episodes" type="number" value="500" min="1" max="50000" step="1" />
+            </label>
+            <label>
+              <span class="label-row">Batch</span>
+              <input name="batch_size" type="number" value="256" min="32" max="2048" step="1" />
+            </label>
+            <label>
+              <span class="label-row">预热</span>
+              <input name="buffer_warmup" type="number" value="256" min="32" max="4096" step="1" />
+            </label>
+            <label>
+              <span class="label-row">随机种子</span>
+              <input name="seed" type="number" value="42" min="0" max="999999" />
+            </label>
+            <label>
+              <span class="label-row">评估间隔</span>
+              <input name="eval_interval" type="number" value="50" min="1" max="1000" step="1" />
+            </label>
+          </div>
+
+          <div class="task-mode-panels">
+            <section class="mode-panel" data-mode-panel="single">
+              <div class="mode-panel-title">
+                <strong>单次训练调参</strong>
+                <span>完整参数，适合观察某个算法是否能学起来。</span>
+              </div>
+              <div class="field-grid">
+                <label>
+                  <span class="label-row">Actor LR <span class="help-tip" tabindex="0" data-tip="策略网络学习率。过大容易震荡，过小收敛慢。">?</span></span>
+                  <input name="actor_lr" type="number" value="0.001" min="0.00001" max="0.01" step="any" />
+                </label>
+                <label>
+                  <span class="label-row">Critic LR <span class="help-tip" tabindex="0" data-tip="价值网络学习率，影响 Q 值估计速度和稳定性。">?</span></span>
+                  <input name="critic_lr" type="number" value="0.001" min="0.00001" max="0.01" step="any" />
+                </label>
+                <label>
+                  <span class="label-row">Gamma <span class="help-tip" tabindex="0" data-tip="折扣因子。越接近 1 越重视长期收益，默认 0.95。">?</span></span>
+                  <input name="gamma" type="number" value="0.95" min="0.8" max="0.99" step="0.01" />
+                </label>
+                <label>
+                  <span class="label-row">评估次数 <span class="help-tip" tabindex="0" data-tip="每次无噪声评估平均多少个 episode。越大越稳但更慢。">?</span></span>
+                  <input name="eval_episodes" type="number" value="5" min="1" max="50" step="1" />
+                </label>
+                <label>
+                  <span class="label-row">覆盖半径 <span class="help-tip" tabindex="0" data-tip="目标点周围多大范围算覆盖成功。值越大评价越宽松。">?</span></span>
+                  <input name="coverage_ratio" type="number" value="0.12" min="0.04" max="0.25" step="0.01" />
+                </label>
+                <label>
+                  <span class="label-row">安全距离 <span class="help-tip" tabindex="0" data-tip="无人机之间低于该距离会产生安全惩罚。">?</span></span>
+                  <input name="safe_ratio" type="number" value="0.10" min="0.04" max="0.25" step="0.01" />
+                </label>
+                <label>
+                  <span class="label-row">最终噪声 <span class="help-tip" tabindex="0" data-tip="训练后期保留的探索噪声比例，默认 0.10。">?</span></span>
+                  <input name="noise_final_scale" type="number" value="0.10" min="0" max="1" step="0.05" />
+                </label>
+              </div>
+            </section>
+
+            <section class="mode-panel hidden" data-mode-panel="exp1">
+              <div class="mode-panel-title">
+                <strong>实验一流程</strong>
+                <span>自动运行 Random 基线，再运行上方选择的训练算法。</span>
+              </div>
+              <p class="panel-copy">用于回答“训练后策略是否明显优于随机运动”。建议算法选择 RS-MADDPG，episode 可以先用 500 快速验证，再拉长训练。</p>
+            </section>
+
+            <section class="mode-panel hidden" data-mode-panel="exp2">
+              <div class="mode-panel-title">
+                <strong>算法对比组</strong>
+                <span>勾选后会按顺序加入同一个任务内部运行。</span>
+              </div>
+              <div class="choice-grid">
+                <label class="choice-card"><input type="checkbox" name="exp2_algorithms" value="Random" checked /><span>Random</span><em>无学习基线</em></label>
+                <label class="choice-card"><input type="checkbox" name="exp2_algorithms" value="IDDPG" checked /><span>IDDPG</span><em>独立学习</em></label>
+                <label class="choice-card"><input type="checkbox" name="exp2_algorithms" value="MADDPG" checked /><span>MADDPG</span><em>集中式 critic</em></label>
+                <label class="choice-card"><input type="checkbox" name="exp2_algorithms" value="RS-MADDPG" checked /><span>RS-MADDPG</span><em>奖励塑形</em></label>
+              </div>
+            </section>
+
+            <section class="mode-panel hidden" data-mode-panel="exp3">
+              <div class="mode-panel-title">
+                <strong>消融实验组</strong>
+                <span>逐步加入关键机制，观察每个模块是否真的有效。</span>
+              </div>
+              <div class="choice-grid">
+                <label class="choice-card"><input type="checkbox" name="exp3_groups" value="maddpg" checked /><span>原始 MADDPG</span><em>基础对照</em></label>
+                <label class="choice-card"><input type="checkbox" name="exp3_groups" value="assignment" checked /><span>+ 目标分配</span><em>减少抢同一目标</em></label>
+                <label class="choice-card"><input type="checkbox" name="exp3_groups" value="redundancy" checked /><span>+ 冗余抑制</span><em>控制重复覆盖</em></label>
+                <label class="choice-card"><input type="checkbox" name="exp3_groups" value="safety" checked /><span>+ 安全约束</span><em>降低碰撞</em></label>
+                <label class="choice-card"><input type="checkbox" name="exp3_groups" value="full" checked /><span>完整 RS-MADDPG</span><em>动态权重</em></label>
+              </div>
+            </section>
+
+            <section class="mode-panel hidden" data-mode-panel="exp4">
+              <div class="mode-panel-title">
+                <strong>泛化规模</strong>
+                <span>用同一算法测试不同无人机数量下的稳定性。</span>
+              </div>
+              <div class="choice-grid compact-choice-grid">
+                <label class="choice-card"><input type="checkbox" name="exp4_scales" value="3" checked /><span>3 机 3 目标</span><em>基础规模</em></label>
+                <label class="choice-card"><input type="checkbox" name="exp4_scales" value="4" checked /><span>4 机 4 目标</span><em>中等规模</em></label>
+                <label class="choice-card"><input type="checkbox" name="exp4_scales" value="5" checked /><span>5 机 5 目标</span><em>更难规模</em></label>
+              </div>
+            </section>
+          </div>
+
+          <input type="hidden" name="actor_lr" value="0.001" data-fallback-param />
+          <input type="hidden" name="critic_lr" value="0.001" data-fallback-param />
+          <input type="hidden" name="gamma" value="0.95" data-fallback-param />
+          <input type="hidden" name="coverage_ratio" value="0.12" data-fallback-param />
+          <input type="hidden" name="safe_ratio" value="0.10" data-fallback-param />
+          <input type="hidden" name="eval_episodes" value="5" data-fallback-param />
+          <input type="hidden" name="noise_final_scale" value="0.10" data-fallback-param />
+          <input type="hidden" name="frame_stride" value="1" />
+          <label class="toggle-row compact-toggle">
+            <input name="use_weight_scheduling" type="checkbox" checked />
+            <span>动态奖励权重 <span class="help-tip" tabindex="0" data-tip="训练早期先学覆盖，后期逐步加强安全和冗余约束。">?</span></span>
+          </label>
+          <label class="toggle-row compact-toggle">
+            <input name="use_wandb" type="checkbox" />
+            <span>启用 W&B <span class="help-tip" tabindex="0" data-tip="同步训练指标到 Weights & Biases，适合长训练和实验对比。">?</span></span>
+          </label>
+          <div class="field-grid tracking-grid">
+            <label>
+              <span class="label-row">W&B Project</span>
+              <input name="wandb_project" type="text" value="uav-marl" />
+            </label>
+            <label>
+              <span class="label-row">Run Name</span>
+              <input name="wandb_run_name" type="text" placeholder="留空自动生成" />
+            </label>
+          </div>
+          <button id="createTaskBtn" type="submit">创建并加入队列</button>
+        </form>
+
+        <section class="panel task-list-panel">
+          <div class="panel-title">
+            <div>
+              <h2>任务列表</h2>
+              <p id="taskListHint">暂无任务</p>
+            </div>
+            <button id="refreshTasksBtn" type="button" class="secondary small-button">刷新</button>
+          </div>
+          <div class="table-scroll">
+            <table id="taskTable">
+              <thead>
+                <tr>
+                  <th>任务</th>
+                  <th>状态</th>
+                  <th>算法</th>
+                  <th>进度</th>
+                  <th>覆盖率</th>
+                  <th>Best</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </div>
+
+    <div id="detailShell" class="app-shell hidden">
       <aside class="sidebar">
         <div class="brand">
           <div class="brand-mark">U</div>
@@ -16,10 +226,21 @@
             <p>协同覆盖训练控制台</p>
           </div>
         </div>
+        <button id="backToTasksBtn" type="button" class="secondary nav-button">返回任务中心</button>
+
+        <section id="taskDesignCard" class="panel task-design-card hidden">
+          <h2>当前实验设计</h2>
+          <p id="taskDesignSummary">选择任务后显示实验流程。</p>
+          <div id="runPlanList" class="run-plan-list"></div>
+        </section>
 
         <form id="configForm" class="control-stack">
           <section class="panel">
             <h2>实验配置</h2>
+            <label>
+              <span class="label-row">任务名 <span class="help-tip" tabindex="0" data-tip="新任务显示在任务中心的名称。留空会自动生成。">?</span></span>
+              <input name="task_name" type="text" placeholder="留空自动生成" />
+            </label>
             <label>
               <span class="label-row">实验模式 <span class="help-tip" tabindex="0" data-tip="选择自动实验流程：单次训练用于快速观察；实验一到四分别对应计划书中的随机对比、算法对比、消融实验和泛化实验。">?</span></span>
               <select name="experiment_mode">
@@ -144,7 +365,7 @@
           </section>
 
           <div class="action-row">
-            <button id="startBtn" type="submit">开始训练</button>
+            <button id="startBtn" type="submit">加入队列</button>
             <button id="stopBtn" type="button" class="secondary">停止</button>
           </div>
         </form>
@@ -154,7 +375,7 @@
         <header class="topbar">
           <div>
             <p class="eyebrow">Real-time multi-agent training</p>
-            <h2>每个 Episode 的智能体运动实时回放</h2>
+            <h2 id="detailTitle">每个 Episode 的智能体运动实时回放</h2>
           </div>
           <div class="status-pill" id="statusPill">idle</div>
         </header>
@@ -216,6 +437,7 @@
                   <tr>
                     <th>Run</th>
                     <th>算法</th>
+                    <th>特性</th>
                     <th>评分</th>
                     <th>覆盖率</th>
                     <th>碰撞</th>
@@ -225,6 +447,19 @@
                 </thead>
                 <tbody></tbody>
               </table>
+            </div>
+          </div>
+
+          <div class="panel asset-panel">
+            <div class="panel-title">
+              <div>
+                <h3>任务资产</h3>
+                <p>训练结束后可下载权重、日志和总结文件</p>
+              </div>
+              <button id="openModelsBtn" type="button" class="secondary small-button">打开模型文件夹</button>
+            </div>
+            <div id="assetList" class="asset-list">
+              <div class="empty-assets">暂无可下载资产。</div>
             </div>
           </div>
 

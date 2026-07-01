@@ -1,5 +1,20 @@
 const AGENT_COLORS = ["#55a7ff", "#ff6b6b", "#f4c430", "#59d98e", "#c77dff"];
 
+const taskCenter = document.getElementById("taskCenter");
+const detailShell = document.getElementById("detailShell");
+const taskForm = document.getElementById("taskForm");
+const taskExperimentMode = document.getElementById("taskExperimentMode");
+const taskModePanels = Array.from(document.querySelectorAll("[data-mode-panel]"));
+const createTaskBtn = document.getElementById("createTaskBtn");
+const taskTableBody = document.querySelector("#taskTable tbody");
+const taskListHint = document.getElementById("taskListHint");
+const refreshTasksBtn = document.getElementById("refreshTasksBtn");
+const queueStatus = document.getElementById("queueStatus");
+const backToTasksBtn = document.getElementById("backToTasksBtn");
+const detailTitle = document.getElementById("detailTitle");
+const taskDesignCard = document.getElementById("taskDesignCard");
+const taskDesignSummary = document.getElementById("taskDesignSummary");
+const runPlanList = document.getElementById("runPlanList");
 const form = document.getElementById("configForm");
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
@@ -7,10 +22,12 @@ const statusPill = document.getElementById("statusPill");
 const frameLabel = document.getElementById("frameLabel");
 const eventLog = document.getElementById("eventLog");
 const deepseekBtn = document.getElementById("deepseekBtn");
+const openModelsBtn = document.getElementById("openModelsBtn");
 const summaryHeadline = document.getElementById("summaryHeadline");
 const diagnosisList = document.getElementById("diagnosisList");
 const recommendationList = document.getElementById("recommendationList");
 const reportText = document.getElementById("reportText");
+const assetList = document.getElementById("assetList");
 const resultTableBody = document.querySelector("#resultTable tbody");
 const simCanvas = document.getElementById("simCanvas");
 const chartCanvas = document.getElementById("chartCanvas");
@@ -33,7 +50,13 @@ const state = {
   history: [],
   report: null,
   llmReport: null,
+  assets: [],
+  runPlan: [],
   currentRun: null,
+  tasks: [],
+  selectedTaskId: null,
+  activeTaskId: null,
+  queue: [],
   lastFrameAt: performance.now(),
   step: 0,
 };
@@ -56,9 +79,10 @@ function resizeCanvas(canvas) {
   }
 }
 
-function parseConfig() {
-  const data = new FormData(form);
+function parseConfig(formElement = form) {
+  const data = new FormData(formElement);
   return {
+    task_name: data.get("task_name") || "",
     experiment_mode: data.get("experiment_mode"),
     algo: data.get("algo"),
     episodes: Number(data.get("episodes")),
@@ -79,6 +103,9 @@ function parseConfig() {
     eval_interval: Number(data.get("eval_interval")),
     eval_episodes: Number(data.get("eval_episodes")),
     noise_final_scale: Number(data.get("noise_final_scale")),
+    exp2_algorithms: data.getAll("exp2_algorithms"),
+    exp3_groups: data.getAll("exp3_groups"),
+    exp4_scales: data.getAll("exp4_scales").map(Number),
   };
 }
 
@@ -97,19 +124,37 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
     startBtn.disabled = true;
-    const snapshot = await postJson("/api/train/start", parseConfig());
+    const snapshot = await postJson("/api/tasks", parseConfig(form));
+    await loadTasks();
+    selectTask(snapshot.task_id);
     applyState(snapshot);
-    logEvent("训练已启动");
+    logEvent("任务已加入队列");
   } catch (error) {
-    logEvent(`启动失败：${error.message}`);
+    logEvent(`创建任务失败：${error.message}`);
   } finally {
     startBtn.disabled = false;
   }
 });
 
+taskForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    createTaskBtn.disabled = true;
+    const snapshot = await postJson("/api/tasks", parseConfig(taskForm));
+    await loadTasks();
+    selectTask(snapshot.task_id);
+  } catch (error) {
+    taskListHint.textContent = `创建失败：${error.message}`;
+  } finally {
+    createTaskBtn.disabled = false;
+  }
+});
+
 stopBtn.addEventListener("click", async () => {
   try {
-    await postJson("/api/train/stop");
+    if (!state.selectedTaskId) return;
+    await postJson(`/api/tasks/${state.selectedTaskId}/stop`);
+    await loadTasks();
     logEvent("停止请求已发送");
   } catch (error) {
     logEvent(`停止失败：${error.message}`);
@@ -120,7 +165,7 @@ deepseekBtn.addEventListener("click", async () => {
   try {
     deepseekBtn.disabled = true;
     deepseekBtn.textContent = "生成中...";
-    const result = await postJson("/api/report/deepseek");
+    const result = await postJson("/api/report/deepseek", { task_id: state.selectedTaskId });
     state.llmReport = result;
     renderLlmReport(result);
     logEvent("DeepSeek 报告已生成");
@@ -132,7 +177,68 @@ deepseekBtn.addEventListener("click", async () => {
   }
 });
 
+refreshTasksBtn.addEventListener("click", () => loadTasks());
+backToTasksBtn.addEventListener("click", () => showTaskCenter());
+taskExperimentMode.addEventListener("change", syncTaskModePanels);
+openModelsBtn.addEventListener("click", async () => {
+  try {
+    await postJson("/api/open/models");
+    logEvent("已请求打开模型文件夹");
+  } catch (error) {
+    logEvent(`打开模型文件夹失败：${error.message}`);
+  }
+});
+
+function syncTaskModePanels() {
+  const mode = taskExperimentMode.value || "single";
+  for (const panel of taskModePanels) {
+    panel.classList.toggle("hidden", panel.dataset.modePanel !== mode);
+  }
+}
+
+async function loadTasks() {
+  const response = await fetch("/api/tasks");
+  if (!response.ok) {
+    throw new Error("当前后端未加载任务队列 API，请重启 Web 服务");
+  }
+  const snapshot = await response.json();
+  applyTaskSnapshot(snapshot);
+  return snapshot;
+}
+
+function applyTaskSnapshot(snapshot) {
+  state.tasks = snapshot.tasks || state.tasks || [];
+  state.activeTaskId = snapshot.active_task_id || null;
+  state.queue = snapshot.queue || [];
+  renderTaskTable();
+}
+
+async function selectTask(taskId) {
+  if (!taskId) return;
+  const snapshot = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`).then((response) => response.json());
+  if (snapshot.error) throw new Error(snapshot.error);
+  state.selectedTaskId = taskId;
+  window.location.hash = `task=${taskId}`;
+  showDetail();
+  applyState(snapshot);
+}
+
+function showTaskCenter() {
+  state.selectedTaskId = null;
+  window.location.hash = "";
+  taskCenter.classList.remove("hidden");
+  detailShell.classList.add("hidden");
+  loadTasks().catch(() => {});
+}
+
+function showDetail() {
+  taskCenter.classList.add("hidden");
+  detailShell.classList.remove("hidden");
+}
+
 function applyState(snapshot) {
+  if (snapshot.tasks) applyTaskSnapshot(snapshot);
+  if (snapshot.task_id && state.selectedTaskId && snapshot.task_id !== state.selectedTaskId) return;
   state.status = snapshot.status || state.status;
   state.config = snapshot.config || state.config;
   state.currentEpisode = snapshot.episode || state.currentEpisode;
@@ -141,12 +247,128 @@ function applyState(snapshot) {
   state.currentRun = snapshot.current_run || state.currentRun;
   state.report = snapshot.report || state.report;
   state.llmReport = snapshot.llm_report || state.llmReport;
+  state.assets = snapshot.assets || state.assets || [];
+  state.runPlan = snapshot.run_plan || state.runPlan || [];
+  if (snapshot.task_name || snapshot.task_id) {
+    detailTitle.textContent = snapshot.task_name || snapshot.task_id || "任务详情";
+  }
   updateStatus();
   if (snapshot.metrics) updateKpis(snapshot.metrics);
   if (state.report) renderReport(state.report);
   if (state.llmReport) renderLlmReport(state.llmReport);
+  renderAssets();
+  renderTaskDesign();
   drawChart();
 }
+
+function renderAssets() {
+  assetList.innerHTML = "";
+  if (!state.assets.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-assets";
+    empty.textContent = "暂无可下载资产。训练完成后会显示 best/final 权重、日志和总结文件。";
+    assetList.appendChild(empty);
+    return;
+  }
+  for (const asset of state.assets) {
+    const row = document.createElement("div");
+    row.className = "asset-row";
+    row.innerHTML = `
+      <div>
+        <strong>${escapeHtml(asset.label || asset.filename || "")}</strong>
+        <span>${escapeHtml(asset.filename || "")}</span>
+      </div>
+      <a href="${escapeHtml(asset.download_url || "#")}">下载</a>
+    `;
+    assetList.appendChild(row);
+  }
+}
+
+function renderTaskDesign() {
+  if (!state.selectedTaskId || !state.config) {
+    taskDesignCard.classList.add("hidden");
+    return;
+  }
+  taskDesignCard.classList.remove("hidden");
+  const modeNames = {
+    single: "单次训练",
+    exp1: "实验一：随机 vs 训练后",
+    exp2: "实验二：算法对比",
+    exp3: "实验三：消融实验",
+    exp4: "实验四：泛化实验",
+  };
+  const mode = state.config.experiment_mode || "single";
+  taskDesignSummary.textContent = `${modeNames[mode] || mode}，${state.config.episodes || 0} episodes，seed ${state.config.seed ?? "-"}`;
+  runPlanList.innerHTML = "";
+  const plan = state.runPlan.length
+    ? state.runPlan
+    : [{ label: state.config.algo || "RS-MADDPG", algo: state.config.algo || "RS-MADDPG", features: [] }];
+  for (const run of plan) {
+    const features = (run.features || []).length ? run.features.join(" / ") : "默认配置";
+    const row = document.createElement("div");
+    row.className = "run-plan-row";
+    row.innerHTML = `
+      <strong>${escapeHtml(run.label || run.algo || "")}</strong>
+      <span>${escapeHtml(run.algo || "")} · ${escapeHtml(features)}</span>
+    `;
+    runPlanList.appendChild(row);
+  }
+}
+
+function renderTaskTable() {
+  taskTableBody.innerHTML = "";
+  queueStatus.textContent = state.activeTaskId ? "running" : (state.queue.length ? "waiting" : "idle");
+  queueStatus.className = `status-pill ${state.activeTaskId ? "running" : ""}`;
+  taskListHint.textContent = state.tasks.length
+    ? `${state.tasks.length} 个任务，队列中 ${state.queue.length} 个`
+    : "暂无任务";
+
+  for (const task of state.tasks) {
+    const row = document.createElement("tr");
+    const progress = `${task.episode || 0} / ${task.episodes || 0}`;
+    const modeLabel = task.experiment_mode && task.experiment_mode !== "single"
+      ? `${task.experiment_mode} · ${task.algo || ""}`
+      : task.algo || "";
+    row.innerHTML = `
+      <td>${escapeHtml(task.task_name || task.task_id || "")}</td>
+      <td><span class="task-status ${escapeHtml(task.status || "")}">${escapeHtml(task.status || "")}</span></td>
+      <td>${escapeHtml(modeLabel)}</td>
+      <td>${progress}</td>
+      <td>${formatPercent(task.coverage_rate)}</td>
+      <td>${Number(task.best_score || 0).toFixed(1)}</td>
+      <td>
+        <div class="table-actions">
+          <button type="button" data-action="view" data-task-id="${escapeHtml(task.task_id)}">查看</button>
+          <button type="button" class="secondary" data-action="stop" data-task-id="${escapeHtml(task.task_id)}">停止</button>
+        </div>
+      </td>
+    `;
+    taskTableBody.appendChild(row);
+  }
+}
+
+taskTableBody.addEventListener("click", async (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  const taskId = button.dataset.taskId;
+  if (!taskId) return;
+  if (button.dataset.action === "view") {
+    try {
+      await selectTask(taskId);
+    } catch (error) {
+      taskListHint.textContent = `打开失败：${error.message}`;
+    }
+    return;
+  }
+  if (button.dataset.action === "stop") {
+    try {
+      await postJson(`/api/tasks/${taskId}/stop`);
+      await loadTasks();
+    } catch (error) {
+      taskListHint.textContent = `停止失败：${error.message}`;
+    }
+  }
+});
 
 function updateStatus() {
   statusPill.textContent = state.status;
@@ -180,8 +402,10 @@ function connectEvents() {
 
   source.addEventListener("state", (event) => applyState(JSON.parse(event.data)));
   source.addEventListener("status", (event) => applyState(JSON.parse(event.data)));
+  source.addEventListener("tasks", (event) => applyTaskSnapshot(JSON.parse(event.data)));
   source.addEventListener("run_start", (event) => {
     const data = JSON.parse(event.data);
+    if (!isCurrentTask(data)) return;
     applyState(data);
     if (data.current_run) {
       logEvent(`开始 ${data.current_run.index}/${data.current_run.total}: ${data.current_run.label}`);
@@ -189,20 +413,26 @@ function connectEvents() {
   });
   source.addEventListener("run_end", (event) => {
     const data = JSON.parse(event.data);
+    if (!isCurrentTask(data)) return;
     if (data.run) logEvent(`${data.run.label} 已完成`);
   });
   source.addEventListener("complete", (event) => {
-    applyState(JSON.parse(event.data));
+    const data = JSON.parse(event.data);
+    if (!isCurrentTask(data)) return;
+    applyState(data);
     logEvent("训练结束");
   });
   source.addEventListener("error", (event) => {
     if (event.data) {
-      applyState(JSON.parse(event.data));
+      const data = JSON.parse(event.data);
+      if (!isCurrentTask(data)) return;
+      applyState(data);
       logEvent("训练异常");
     }
   });
   source.addEventListener("episode_start", (event) => {
     const data = JSON.parse(event.data);
+    if (!isCurrentTask(data)) return;
     state.currentEpisode = data.episode;
     state.totalEpisodes = data.total_episodes;
     state.coverageRadius = data.coverage_radius;
@@ -218,11 +448,13 @@ function connectEvents() {
   });
   source.addEventListener("frame", (event) => {
     const frame = JSON.parse(event.data);
+    if (!isCurrentTask(frame)) return;
     state.frameQueue.push(frame);
     if (state.frameQueue.length > 240) state.frameQueue.splice(0, state.frameQueue.length - 240);
   });
   source.addEventListener("episode_end", (event) => {
     const data = JSON.parse(event.data);
+    if (!isCurrentTask(data)) return;
     state.currentEpisode = data.episode;
     state.totalEpisodes = data.total_episodes;
     state.history.push(data.metrics);
@@ -234,24 +466,28 @@ function connectEvents() {
   });
   source.addEventListener("best", (event) => {
     const data = JSON.parse(event.data);
+    if (!isCurrentTask(data)) return;
     const score = Number(data.metrics?.score || 0).toFixed(1);
     const coverage = Math.round(Number(data.metrics?.coverage_rate || 0) * 100);
     logEvent(`刷新最佳模型：Episode ${data.metrics?.episode || "-"}，评分 ${score}，覆盖率 ${coverage}%`);
   });
   source.addEventListener("report", (event) => {
     const data = JSON.parse(event.data);
+    if (!isCurrentTask(data)) return;
     state.report = data;
     renderReport(data);
     logEvent("结构化结果总结已生成");
   });
   source.addEventListener("llm_report", (event) => {
     const data = JSON.parse(event.data);
+    if (!isCurrentTask(data)) return;
     state.llmReport = data;
     renderLlmReport(data);
     logEvent("DeepSeek 报告已返回");
   });
   source.addEventListener("wandb", (event) => {
     const data = JSON.parse(event.data);
+    if (!isCurrentTask(data)) return;
     if (data.status === "active") {
       logEvent(`W&B 已连接：${data.project} / ${data.run_name}`);
       if (data.url) logEvent(`W&B 链接：${data.url}`);
@@ -259,6 +495,10 @@ function connectEvents() {
       logEvent(`W&B 启动失败：${data.message || "unknown error"}`);
     }
   });
+}
+
+function isCurrentTask(data) {
+  return !state.selectedTaskId || !data.task_id || data.task_id === state.selectedTaskId;
 }
 
 function renderReport(report) {
@@ -285,6 +525,7 @@ function renderReport(report) {
     row.innerHTML = `
       <td>${escapeHtml(run.label || "")}</td>
       <td>${escapeHtml(run.algo || "")}</td>
+      <td>${escapeHtml((run.config?.features || []).join(" / ") || "默认配置")}</td>
       <td>${Number(run.score || 0).toFixed(1)}</td>
       <td>${formatPercent(last.coverage_rate?.mean)}</td>
       <td>${formatNumber(last.collision_count?.mean)}</td>
@@ -329,7 +570,8 @@ function worldToCanvas(pos, canvas) {
 
 function radiusToCanvas(r, canvas) {
   const margin = 42 * (window.devicePixelRatio || 1);
-  return (r / 2.4) * Math.min(canvas.width - margin * 2, canvas.height - margin * 2);
+  const drawable = Math.max(0, Math.min(canvas.width - margin * 2, canvas.height - margin * 2));
+  return Math.max(0, (r / 2.4) * drawable);
 }
 
 function lerp(a, b, t) {
@@ -345,10 +587,19 @@ function interpolatePositions(prev, next, alpha) {
 }
 
 function drawSimulation(timestamp) {
+  if (detailShell.classList.contains("hidden")) {
+    requestAnimationFrame(drawSimulation);
+    return;
+  }
+
   resizeCanvas(simCanvas);
   const ctx = simCtx;
   const w = simCanvas.width;
   const h = simCanvas.height;
+  if (w < 8 || h < 8) {
+    requestAnimationFrame(drawSimulation);
+    return;
+  }
 
   if (state.frameQueue.length) {
     state.previousFrame = state.latestFrame || state.frameQueue[0];
@@ -408,6 +659,7 @@ function drawGrid(ctx, w, h) {
 
 function drawLandmarks(ctx) {
   const coveragePx = radiusToCanvas(state.coverageRadius, simCanvas);
+  if (coveragePx <= 0) return;
   for (const landmark of state.landmarks) {
     const [x, y] = worldToCanvas(landmark, simCanvas);
     ctx.save();
@@ -570,6 +822,26 @@ window.addEventListener("resize", () => {
   drawChart();
 });
 
+window.addEventListener("hashchange", () => {
+  const taskId = readTaskIdFromHash();
+  if (taskId) selectTask(taskId).catch(() => showTaskCenter());
+  else showTaskCenter();
+});
+
+function readTaskIdFromHash() {
+  const match = window.location.hash.match(/task=([^&]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 connectEvents();
+syncTaskModePanels();
 requestAnimationFrame(drawSimulation);
-fetch("/api/state").then((r) => r.json()).then(applyState).catch(() => {});
+loadTasks()
+  .then(() => {
+    const taskId = readTaskIdFromHash();
+    if (taskId) return selectTask(taskId);
+    showTaskCenter();
+    return null;
+  })
+  .catch(() => showTaskCenter());
+setInterval(() => loadTasks().catch(() => {}), 5000);

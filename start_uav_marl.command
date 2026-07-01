@@ -88,6 +88,10 @@ print_ok "依赖已就绪"
 
 print_step "检查 DeepSeek API Key"
 
+if [ "${DEEPSEEK_API_KEY:-}" = "your_deepseek_api_key_here" ]; then
+  unset DEEPSEEK_API_KEY
+fi
+
 if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
   print_warn "未检测到 DEEPSEEK_API_KEY"
   printf "请输入 DeepSeek API Key（输入时不会显示，留空则跳过 LLM 报告功能）: "

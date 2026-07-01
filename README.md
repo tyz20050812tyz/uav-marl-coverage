@@ -61,7 +61,7 @@ RS-MADDPG（改进方法）
 - **奖励塑形改进方案**：在 MADDPG 框架上针对协同覆盖任务的核心痛点（重复覆盖、碰撞风险）精准优化奖励函数
 - **消融实验验证**：逐模块验证目标分配、冗余惩罚、安全距离、动态权重的独立贡献
 - **泛化性测试**：N=3/4/5 不同规模场景下的算法扩展性评估
-- **工业风 Web 训练控制台**：纯 HTML/CSS/JS 前端 + Python 标准库 HTTP 服务器，Canvas 实时 2D 渲染 + SSE 事件流推送，零外部框架依赖
+- **工业风 Web 实验平台**：纯 HTML/CSS/JS 前端 + Python 标准库 HTTP 服务器，任务中心、单任务运行队列、Canvas 实时 2D 渲染 + SSE 事件流推送，零外部框架依赖
 - **实验模式与自动总结**：支持单次训练、随机 vs 训练后、算法对比、消融实验、泛化实验；实验结束后自动生成结构化指标总结和报告文本
 - **无噪声评估与最佳模型保存**：训练过程保留探索噪声，报告与评分使用周期性无噪声评估，并自动保存 best checkpoint
 - **DeepSeek 报告生成**：可选调用 DeepSeek，将结构化指标转换为课程报告风格的自然语言结论
@@ -265,12 +265,16 @@ start_uav_marl.command
 python web_server.py --port 8600
 ```
 
-浏览器打开 `http://127.0.0.1:8600`，即可看到工业风训练控制台：
+浏览器打开 `http://127.0.0.1:8600`，会先进入任务中心：
 
-- **左侧边栏**：配置实验模式、算法、智能体数量、超参数、安全与覆盖参数、W&B 追踪
+- **任务中心**：创建多个实验任务，查看 waiting / running / completed / failed / stopped 状态
+- **模式化任务创建**：单次训练显示完整调参项；算法对比、消融实验、泛化实验显示对应实验组勾选项
+- **单任务队列**：可以排多个任务，但后端默认一次只运行一个任务，避免本机资源被多个 PyTorch 训练同时占满
+- **任务详情页**：点击任务进入当前训练详情，查看实验设计、KPI、Canvas 实时动画、训练曲线、事件流、结果总结和 DeepSeek 报告
+- **左侧边栏**：在详情页继续配置实验模式、算法、智能体数量、超参数、安全与覆盖参数、W&B 追踪，并加入新任务队列
 - **右侧主区域**：KPI 指标卡片（Episode / 评估覆盖率 / 碰撞 / 奖励 / 完成步数）、Canvas 2D 实时仿真动画、训练曲线图、事件流日志
-- **结果总结区**：实验结束后自动展示结构化结论、指标总览表、诊断建议和报告文本
-- **一键操作**：点击「开始训练」启动后台训练线程，点击「停止」中断训练
+- **结果总结区**：实验结束后自动展示结构化结论、指标总览表、诊断建议、报告文本和任务资产下载
+- **一键操作**：点击「创建并加入队列」或「加入队列」创建后台训练任务，点击「停止」中断训练
 - **实时推送**：通过 Server-Sent Events (SSE) 将每个环境步的智能体位置实时推送到浏览器，Canvas 逐帧渲染运动轨迹
 - **稳定评估**：训练 episode 仍然带探索噪声用于学习；每隔固定轮数会用 `add_noise=False` 独立评估当前策略，结果总结和 best 模型以该评估结果为准
 
@@ -355,6 +359,8 @@ export DEEPSEEK_API_KEY="你的 DeepSeek API Key"
 
 页面中点击「DeepSeek 生成报告」即可生成自然语言结论。若未设置 `DEEPSEEK_API_KEY`，训练和结构化总结仍可正常使用，只是 LLM 报告按钮会提示缺少密钥。
 
+如果项目根目录存在 `.env.local`，`web_server.py` 会在启动时自动读取其中的 `DEEPSEEK_API_KEY`。因此无论是双击 `start_uav_marl.command`，还是手动执行 `python web_server.py --port 8600`，都可以使用同一份本地密钥配置。
+
 ### 4.3 命令行训练
 
 Web 控制台的训练逻辑与命令行实验脚本共享同一套智能体和环境模块，你也可以跳过 Web UI 直接运行实验脚本。
@@ -427,6 +433,15 @@ ls outputs/models/
 ```
 
 训练曲线和评估结果也会在 Web 控制台的 Canvas 图表中实时呈现。
+
+Web 详情页的「任务资产」区域会在训练结束后自动列出：
+
+- `Best 权重`：无噪声评估分数最高时保存的模型，优先用于汇报和复现实验
+- `Final 权重`：训练结束时的最终模型
+- `训练日志`：每个 episode 的指标 JSON
+- `结构化总结 JSON`：结果总结和诊断建议的原始数据
+
+可以直接点击「下载」，也可以点击「打开模型文件夹」进入 `outputs/models/`。
 
 ### 4.5 运行测试
 
@@ -708,10 +723,16 @@ DEFAULT_CONFIG = {
     "wandb_run_name": "",
     "update_repeats": 1,
     "frame_stride": 1,
+    "eval_interval": 50,
+    "eval_episodes": 5,
+    "noise_final_scale": 0.10,
+    "exp2_algorithms": ["Random", "IDDPG", "MADDPG", "RS-MADDPG"],
+    "exp3_groups": ["maddpg", "assignment", "redundancy", "safety", "full"],
+    "exp4_scales": [3, 4, 5],
 }
 ```
 
-这些配置可在浏览器页面左侧修改，并通过 `/api/train/start` 发送到后端。后端会进行范围校验和裁剪，避免非法参数导致训练崩溃。
+这些配置可在浏览器任务中心或详情页左侧修改，并通过 `/api/tasks` 创建任务。后端会进行范围校验和裁剪，避免非法参数导致训练崩溃。实验二、实验三、实验四支持在任务中心勾选要运行的算法组、消融组或泛化规模。
 
 ### 8.3 Web 实验模式
 
@@ -719,9 +740,9 @@ DEFAULT_CONFIG = {
 |------|-------------------|--------------|------------|
 | 单次训练 | `single` | 当前选择的一个算法 | 调试、快速观察 |
 | 实验一：随机 vs 训练后 | `exp1` | Random + 当前训练算法（默认 RS-MADDPG） | 实验一 |
-| 实验二：算法对比 | `exp2` | Random / IDDPG / MADDPG / RS-MADDPG | 实验二 |
-| 实验三：消融实验 | `exp3` | MADDPG baseline、+Assignment、+Redundancy、+Safety、RS-MADDPG full | 实验三 |
-| 实验四：泛化实验 | `exp4` | N=3 / N=4 / N=5 的 RS-MADDPG | 实验四 |
+| 实验二：算法对比 | `exp2` | 默认 Random / IDDPG / MADDPG / RS-MADDPG，可在任务中心勾选子集 | 实验二 |
+| 实验三：消融实验 | `exp3` | 默认 MADDPG baseline、+Assignment、+Redundancy、+Safety、RS-MADDPG full，可勾选子集 | 实验三 |
+| 实验四：泛化实验 | `exp4` | 默认 N=3 / N=4 / N=5 的 RS-MADDPG，可勾选规模子集 | 实验四 |
 
 > 批量实验会按 run 队列依次执行。每个 run 结束后保存日志；整个实验完成后自动生成结构化总结。
 
@@ -783,17 +804,24 @@ DEFAULT_CONFIG = {
 | `/` | GET | 服务 index.html |
 | `/styles.css` | GET | 样式表 |
 | `/app.js` | GET | 前端 JS |
-| `/api/state` | GET | 获取当前训练状态快照 |
+| `/api/tasks` | GET | 获取任务列表、当前运行任务和等待队列 |
+| `/api/tasks` | POST | 创建训练任务并加入队列 |
+| `/api/tasks/<task_id>` | GET | 获取指定任务详情 |
+| `/api/tasks/<task_id>/stop` | POST | 停止指定任务；若还在等待队列中则直接取消 |
+| `/api/tasks/<task_id>/download?asset=<asset_id>` | GET | 下载指定任务的 best/final 权重、日志或总结 JSON |
+| `/api/state?task_id=<task_id>` | GET | 获取指定任务状态快照；不传 task_id 时返回当前运行任务 |
 | `/api/events` | GET | SSE 事件流（实时推送训练数据） |
-| `/api/train/start` | POST | 启动训练（传入配置 JSON） |
-| `/api/train/stop` | POST | 停止训练 |
-| `/api/report/deepseek` | POST | 调用 DeepSeek 基于结构化总结生成自然语言报告 |
+| `/api/train/start` | POST | 兼容旧接口：创建训练任务并加入队列 |
+| `/api/train/stop` | POST | 兼容旧接口：停止当前运行任务或请求体中的 task_id |
+| `/api/report/deepseek` | POST | 调用 DeepSeek 基于指定任务的结构化总结生成自然语言报告 |
+| `/api/open/models` | POST | 请求系统打开 `outputs/models/` 模型文件夹 |
 
 ### 9.3 SSE 事件类型
 
 | 事件 | 触发时机 | 携带数据 |
 |------|---------|---------|
 | `status` | 状态变更 | 完整训练状态快照 |
+| `tasks` | 任务列表变化 | 全部任务摘要、当前运行任务、等待队列 |
 | `run_start` | 批量实验中某个 run 开始 | run 序号、算法、标签 |
 | `run_end` | 某个 run 结束 | run 结果、历史日志 |
 | `episode_start` | 每 episode 开始 | 地标位置、覆盖/安全半径 |
@@ -871,7 +899,7 @@ python web_server.py --port 8600
 # 可选参数：--host 127.0.0.1（默认）、--port 8600（默认）
 ```
 
-浏览器打开 `http://127.0.0.1:8600`，配置参数后点击「开始训练」。
+浏览器打开 `http://127.0.0.1:8600`，配置参数后点击「创建并加入队列」。
 
 ### 9.8 与 Streamlit 旧版的关系
 

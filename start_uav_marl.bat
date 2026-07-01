@@ -100,6 +100,8 @@ call :print_ok "依赖已就绪"
 :: ----- 检查 DeepSeek API Key -----
 call :print_step "检查 DeepSeek API Key"
 
+if "%DEEPSEEK_API_KEY%"=="your_deepseek_api_key_here" set "DEEPSEEK_API_KEY="
+
 if "%DEEPSEEK_API_KEY%"=="" (
     call :print_warn "未检测到 DEEPSEEK_API_KEY"
 
